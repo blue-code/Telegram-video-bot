@@ -3,7 +3,7 @@
 이 계획은 TDD(테스트 주도 개발) 원칙을 따르며, 각 단계의 마지막에는 사용자 검증 단계가 포함됩니다.
 
 ## Phase 1: 기반 구조 및 DB 연동
-- [ ] Task: 프로젝트 환경 설정 (requirements.txt, .env 설정)
+- [x] Task: 프로젝트 환경 설정 (requirements.txt, .env 설정) a103c11
 - [ ] Task: 몽고디비 아틀라스 연동 모듈 작성 (Motor 사용)
   - [ ] Sub-task: DB 연결 테스트 코드 작성
   - [ ] Sub-task: DB 연결 및 기본 CRUD 로직 구현
