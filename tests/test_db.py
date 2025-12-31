@@ -50,3 +50,8 @@ async def test_crud_operations():
         # Test Get
         await get_video_by_url("http://test.com")
         mock_collection.find_one.assert_called_with({"url": "http://test.com"})
+
+        # Test Get by File ID
+        from src.db import get_video_by_file_id
+        await get_video_by_file_id("file_123")
+        mock_collection.find_one.assert_called_with({"file_id": "file_123"})
