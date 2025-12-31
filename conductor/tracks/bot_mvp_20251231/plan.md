@@ -19,7 +19,7 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Media Processing' (Protocol in workflow.md)
 
 ## Phase 3: 텔레그램 봇 핵심 기능
-- [ ] Task: 봇 기본 명령어 (/start, /help) 및 비동기 루프 설정
+- [x] Task: 봇 기본 명령어 (/start, /help) 및 비동기 루프 설정 d9c7bdb
   - [ ] Sub-task: 명령어 핸들러 테스트 코드 작성
   - [ ] Sub-task: 핸들러 및 봇 초기화 구현
 - [ ] Task: URL 수신 및 인라인 버튼 메뉴 구현
