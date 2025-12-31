@@ -1,0 +1,9 @@
+python-telegram-bot
+fastapi
+uvicorn
+jinja2
+yt-dlp
+motor
+python-dotenv
+pytest
+httpx
