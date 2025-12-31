@@ -4,7 +4,7 @@
 
 ## Phase 1: 기반 구조 및 DB 연동
 - [x] Task: 프로젝트 환경 설정 (requirements.txt, .env 설정) a103c11
-- [ ] Task: 몽고디비 아틀라스 연동 모듈 작성 (Motor 사용)
+- [x] Task: 몽고디비 아틀라스 연동 모듈 작성 (Motor 사용) ad47c11
   - [ ] Sub-task: DB 연결 테스트 코드 작성
   - [ ] Sub-task: DB 연결 및 기본 CRUD 로직 구현
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Database Setup' (Protocol in workflow.md)
