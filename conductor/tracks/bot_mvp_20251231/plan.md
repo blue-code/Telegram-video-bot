@@ -13,9 +13,9 @@
 - [x] Task: yt-dlp 통합 및 영상 정보 추출 로직 구현 7b558cd
   - [x] Sub-task: 정보 추출 기능 테스트 코드 작성
   - [x] Sub-task: URL 분석 및 메타데이터 반환 기능 구현
-- [ ] Task: FFmpeg 기반 영상 분할 로직 구현
-  - [ ] Sub-task: 영상 분할 기능 테스트 코드 작성
-  - [ ] Sub-task: 대용량 영상 자동 분할 로직 구현
+- [x] Task: FFmpeg 기반 영상 분할 로직 구현 a498b0d
+  - [x] Sub-task: 영상 분할 기능 테스트 코드 작성
+  - [x] Sub-task: 대용량 영상 자동 분할 로직 구현
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Media Processing' (Protocol in workflow.md)
 
 ## Phase 3: 텔레그램 봇 핵심 기능
