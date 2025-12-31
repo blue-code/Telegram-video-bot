@@ -10,9 +10,9 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 1: Database Setup' (Protocol in workflow.md)
 
 ## Phase 2: 미디어 처리 (yt-dlp & FFmpeg)
-- [ ] Task: yt-dlp 통합 및 영상 정보 추출 로직 구현
-  - [ ] Sub-task: 정보 추출 기능 테스트 코드 작성
-  - [ ] Sub-task: URL 분석 및 메타데이터 반환 기능 구현
+- [x] Task: yt-dlp 통합 및 영상 정보 추출 로직 구현 7b558cd
+  - [x] Sub-task: 정보 추출 기능 테스트 코드 작성
+  - [x] Sub-task: URL 분석 및 메타데이터 반환 기능 구현
 - [ ] Task: FFmpeg 기반 영상 분할 로직 구현
   - [ ] Sub-task: 영상 분할 기능 테스트 코드 작성
   - [ ] Sub-task: 대용량 영상 자동 분할 로직 구현
