@@ -18,14 +18,14 @@
   - [x] Sub-task: 대용량 영상 자동 분할 로직 구현
 - [x] Task: Conductor - User Manual Verification 'Phase 2: Media Processing' (Protocol in workflow.md)
 
-## Phase 3: 텔레그램 봇 핵심 기능
+## Phase 3: 텔레그램 봇 핵심 기능 [checkpoint: 294d2de]
 - [x] Task: 봇 기본 명령어 (/start, /help) 및 비동기 루프 설정 d9c7bdb
   - [ ] Sub-task: 명령어 핸들러 테스트 코드 작성
   - [ ] Sub-task: 핸들러 및 봇 초기화 구현
 - [x] Task: URL 수신 및 인라인 버튼 메뉴 구현 6e8222a
   - [x] Sub-task: 메뉴 생성 및 콜백 핸들러 테스트 코드 작성
   - [x] Sub-task: 화질 선택 메뉴 및 상태 관리 구현
-- [ ] Task: Conductor - User Manual Verification 'Phase 3: Bot Interaction' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 3: Bot Interaction' (Protocol in workflow.md)
 
 ## Phase 4: 다운로드 & 업로드 파이프라인
 - [ ] Task: 진행률 바가 포함된 다운로드 로직 구현
