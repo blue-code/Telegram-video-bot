@@ -22,9 +22,9 @@
 - [x] Task: 봇 기본 명령어 (/start, /help) 및 비동기 루프 설정 d9c7bdb
   - [ ] Sub-task: 명령어 핸들러 테스트 코드 작성
   - [ ] Sub-task: 핸들러 및 봇 초기화 구현
-- [ ] Task: URL 수신 및 인라인 버튼 메뉴 구현
-  - [ ] Sub-task: 메뉴 생성 및 콜백 핸들러 테스트 코드 작성
-  - [ ] Sub-task: 화질 선택 메뉴 및 상태 관리 구현
+- [x] Task: URL 수신 및 인라인 버튼 메뉴 구현 6e8222a
+  - [x] Sub-task: 메뉴 생성 및 콜백 핸들러 테스트 코드 작성
+  - [x] Sub-task: 화질 선택 메뉴 및 상태 관리 구현
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Bot Interaction' (Protocol in workflow.md)
 
 ## Phase 4: 다운로드 & 업로드 파이프라인
