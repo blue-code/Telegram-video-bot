@@ -48,9 +48,9 @@
   - [x] Sub-task: 다운로드 파일을 Bin Channel로 업로드하고 사용자에게 포워딩하는 로직 구현
 
 ## Phase 7: 웹 스트리밍 지원 (Direct Link) [Pro]
-- [ ] Task: FastAPI 기반 스트리밍 서버 구현
-  - [ ] Sub-task: 스트리밍 엔드포인트 테스트 코드 작성 (/watch/{id})
-  - [ ] Sub-task: Telegram FileStreamer 연동 및 재생 페이지(HTML) 구현
+- [x] Task: FastAPI 기반 스트리밍 서버 구현 8c816f2
+  - [x] Sub-task: 스트리밍 엔드포인트 테스트 코드 작성 (/watch/{id})
+  - [x] Sub-task: Telegram FileStreamer 연동 및 재생 페이지(HTML) 구현
 
 ## Phase 8: 대량 처리 및 고급 기능 [Pro]
 - [ ] Task: 유튜브 플레이리스트 및 배치 다운로드 지원
