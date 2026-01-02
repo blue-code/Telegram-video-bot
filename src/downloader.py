@@ -1,4 +1,5 @@
 import asyncio
+import os
 import yt_dlp
 from functools import partial
 
@@ -27,3 +28,58 @@ async def extract_video_info(url: str):
         'formats': info.get('formats', []),
         'webpage_url': info.get('webpage_url')
     }
+
+async def download_video(url: str, format_id: str, output_path: str, progress_hook=None):
+    """
+    Asynchronously downloads a video with a specific format.
+    """
+    ydl_opts = {
+        'format': f"{format_id}+bestvideo/best" if format_id != 'bestaudio' else 'bestaudio/best',
+        'outtmpl': f"{output_path}/%(id)s.%(ext)s",
+        'quiet': False, # Debugging: show what's happening
+        'no_warnings': False,
+        'progress_hooks': [progress_hook] if progress_hook else [],
+        'restrictedfilenames': True,
+    }
+    
+    if format_id == 'bestaudio':
+        ydl_opts['postprocessors'] = [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }]
+
+    loop = asyncio.get_running_loop()
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        # download=True will perform the actual download
+        func = partial(ydl.extract_info, url, download=True)
+        info = await loop.run_in_executor(None, func)
+        
+        # 1. Try to get filename from requested_downloads
+        if 'requested_downloads' in info and info['requested_downloads']:
+            filename = info['requested_downloads'][0].get('filepath')
+            if filename and os.path.exists(filename):
+                return filename
+        
+        # 2. Try to get it from '_filename' in info
+        filename = info.get('_filename')
+        if filename and os.path.exists(filename):
+            return filename
+
+        # 3. Handle MP3 conversion case specifically
+        if format_id == 'bestaudio':
+            # Base name from prepare_filename but with .mp3
+            base_filename = ydl.prepare_filename(info)
+            mp3_filename = os.path.splitext(base_filename)[0] + ".mp3"
+            if os.path.exists(mp3_filename):
+                return mp3_filename
+            
+        # 4. Search directory as a last resort
+        if os.path.exists(output_path):
+            # Sort by modification time to get the most recent file
+            files = [os.path.join(output_path, f) for f in os.listdir(output_path)]
+            if files:
+                latest_file = max(files, key=os.path.getmtime)
+                return latest_file
+            
+        return ydl.prepare_filename(info)

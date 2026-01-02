@@ -1,40 +1,46 @@
 import os
-from motor.motor_asyncio import AsyncIOMotorClient
+from supabase import create_async_client, AsyncClient
 from dotenv import load_dotenv
 
 load_dotenv()
 
-MONGO_URI = os.getenv("MONGO_URI")
-DB_NAME = "telegram_video_bot"
-VIDEO_COLLECTION = "videos"
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+VIDEO_TABLE = "videos"
 
-client = None
+client: AsyncClient = None
 
-async def get_database():
+async def get_database() -> AsyncClient:
+    """Returns the Supabase async client instance."""
     global client
     if client is None:
-        if not MONGO_URI:
-             # Fallback or error if env not set, but for now let's assume valid config
-             # or let Motor handle it.
-             pass
-        client = AsyncIOMotorClient(MONGO_URI)
-    return client[DB_NAME]
+        if not SUPABASE_URL or not SUPABASE_KEY:
+            raise ValueError("SUPABASE_URL or SUPABASE_KEY not found in environment variables!")
+        client = await create_async_client(SUPABASE_URL, SUPABASE_KEY)
+    return client
 
 async def close_database():
+    """No explicit close needed for Supabase client, but kept for interface compatibility."""
     global client
-    if client:
-        client.close()
-        client = None
+    client = None
 
 async def save_video_metadata(data: dict):
-    db = await get_database()
-    result = await db[VIDEO_COLLECTION].insert_one(data)
-    return result.inserted_id
+    """
+    Saves video metadata to Supabase.
+    If the URL already exists, it will be updated (upsert).
+    """
+    sb = await get_database()
+    result = await sb.table(VIDEO_TABLE).upsert(data, on_conflict="url").execute()
+    return result.data
 
 async def get_video_by_url(url: str):
-    db = await get_database()
-    return await db[VIDEO_COLLECTION].find_one({"url": url})
+    """Retrieves video metadata by original URL."""
+    sb = await get_database()
+    result = await sb.table(VIDEO_TABLE).select("*").eq("url", url).execute()
+    return result.data[0] if result.data else None
 
 async def get_video_by_file_id(file_id: str):
-    db = await get_database()
-    return await db[VIDEO_COLLECTION].find_one({"file_id": file_id})
+    """Retrieves video metadata by Telegram File ID."""
+    sb = await get_database()
+    result = await sb.table(VIDEO_TABLE).select("*").eq("file_id", file_id).execute()
+    return result.data[0] if result.data else None

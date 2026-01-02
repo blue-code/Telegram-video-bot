@@ -13,6 +13,8 @@ async def get_video_duration(file_path: str) -> float:
         file_path
     ]
     
+    import logging
+    logging.info(f"Running ffprobe for: {file_path}")
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -22,9 +24,12 @@ async def get_video_duration(file_path: str) -> float:
     stdout, stderr = await process.communicate()
     
     if process.returncode != 0:
+        logging.error(f"ffprobe failed: {stderr.decode()}")
         raise Exception(f"ffprobe failed: {stderr.decode()}")
         
-    return float(stdout.decode().strip())
+    duration = float(stdout.decode().strip())
+    logging.info(f"ffprobe duration: {duration}")
+    return duration
 
 async def split_video(file_path: str, max_size_bytes: int = 2 * 1024 * 1024 * 1024) -> list[str]:
     """
@@ -69,6 +74,8 @@ async def split_video(file_path: str, max_size_bytes: int = 2 * 1024 * 1024 * 10
             output_name
         ]
         
+        import logging
+        logging.info(f"Splitting part {i+1}/{num_parts}: {output_name}")
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -78,7 +85,10 @@ async def split_video(file_path: str, max_size_bytes: int = 2 * 1024 * 1024 * 10
         stdout, stderr = await process.communicate()
         
         if process.returncode != 0:
+            logging.error(f"ffmpeg split failed: {stderr.decode()}")
             raise Exception(f"ffmpeg split failed: {stderr.decode()}")
+            
+        logging.info(f"Split part {i+1} completed.")
             
         output_parts.append(output_name)
         
