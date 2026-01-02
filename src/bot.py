@@ -238,6 +238,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 
                                 if bin_channel_id:
                                     try:
+                                        # Reset file pointer before upload
+                                        video_file.seek(0)
                                         bin_msg = await context.bot.send_video(
                                             chat_id=int(bin_channel_id),
                                             video=video_file,
@@ -252,6 +254,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     except Exception as e:
                                         logging.error(f"Failed to upload to Bin Channel: {e}")
                                         # Fallback: Upload directly to user (file_to_send remains video_file)
+                                        # Reset file pointer again just in case
+                                        video_file.seek(0)
 
                                 # 2. Send to User
                                 sent_msg = await context.bot.send_video(
@@ -272,6 +276,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                 
                                 if bin_channel_id:
                                     try:
+                                        # Reset file pointer before upload
+                                        video_file.seek(0)
                                         bin_msg = await context.bot.send_audio(
                                             chat_id=int(bin_channel_id),
                                             audio=video_file,
@@ -283,6 +289,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         file_to_send = bin_msg.audio.file_id
                                     except Exception as e:
                                         logging.error(f"Failed to upload audio to Bin Channel: {e}")
+                                        # Reset file pointer again just in case
+                                        video_file.seek(0)
 
                                 sent_msg = await context.bot.send_audio(
                                     chat_id=query.message.chat_id,
