@@ -41,3 +41,18 @@
   - [x] Sub-task: File ID 조회 및 전송 테스트 코드 작성
   - [x] Sub-task: 캐시(DB) 확인 및 재전송 로직 구현
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Streaming & MVP' (Protocol in workflow.md)
+
+## Phase 6: 안정적인 저장소 (Bin Channel) [Pro]
+- [ ] Task: Bin Channel 연동 및 파일 관리 로직 구현
+  - [ ] Sub-task: 채널 ID 설정 및 포워딩 테스트 코드 작성
+  - [ ] Sub-task: 다운로드 파일을 Bin Channel로 업로드하고 사용자에게 포워딩하는 로직 구현
+
+## Phase 7: 웹 스트리밍 지원 (Direct Link) [Pro]
+- [ ] Task: FastAPI 기반 스트리밍 서버 구현
+  - [ ] Sub-task: 스트리밍 엔드포인트 테스트 코드 작성 (/watch/{id})
+  - [ ] Sub-task: Telegram FileStreamer 연동 및 재생 페이지(HTML) 구현
+
+## Phase 8: 대량 처리 및 고급 기능 [Pro]
+- [ ] Task: 유튜브 플레이리스트 및 배치 다운로드 지원
+  - [ ] Sub-task: 플레이리스트 URL 파싱 및 작업 큐 로직 테스트
+  - [ ] Sub-task: 순차적 다운로드/업로드 처리기 구현
