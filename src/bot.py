@@ -231,26 +231,68 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     for attempt in range(max_retries):
                         try:
                             if part.lower().endswith('.mp4'):
+                                # 1. Upload to Bin Channel if configured
+                                bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+                                file_to_send = video_file
+                                bin_msg = None
+                                
+                                if bin_channel_id:
+                                    try:
+                                        bin_msg = await context.bot.send_video(
+                                            chat_id=int(bin_channel_id),
+                                            video=video_file,
+                                            caption=f"{video_meta['title']}{part_label}\n\nID: {video_id}",
+                                            supports_streaming=True,
+                                            read_timeout=600, 
+                                            write_timeout=600, 
+                                            connect_timeout=60
+                                        )
+                                        # Use the file_id from Bin Channel for the user
+                                        file_to_send = bin_msg.video.file_id
+                                    except Exception as e:
+                                        logging.error(f"Failed to upload to Bin Channel: {e}")
+                                        # Fallback: Upload directly to user (file_to_send remains video_file)
+
+                                # 2. Send to User
                                 sent_msg = await context.bot.send_video(
                                     chat_id=query.message.chat_id,
-                                    video=video_file,
+                                    video=file_to_send,
                                     caption=f"{video_meta['title']}{part_label}",
                                     supports_streaming=True,
                                     read_timeout=600, 
                                     write_timeout=600, 
                                     connect_timeout=60
                                 )
-                                file_id = sent_msg.video.file_id
+                                file_id = bin_msg.video.file_id if bin_msg else sent_msg.video.file_id
                             else:
+                                # Audio logic (similar pattern)
+                                bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+                                file_to_send = video_file
+                                bin_msg = None
+                                
+                                if bin_channel_id:
+                                    try:
+                                        bin_msg = await context.bot.send_audio(
+                                            chat_id=int(bin_channel_id),
+                                            audio=video_file,
+                                            caption=f"{video_meta['title']}{part_label}\n\nID: {video_id}",
+                                            read_timeout=600,
+                                            write_timeout=600,
+                                            connect_timeout=60
+                                        )
+                                        file_to_send = bin_msg.audio.file_id
+                                    except Exception as e:
+                                        logging.error(f"Failed to upload audio to Bin Channel: {e}")
+
                                 sent_msg = await context.bot.send_audio(
                                     chat_id=query.message.chat_id,
-                                    audio=video_file,
+                                    audio=file_to_send,
                                     caption=f"{video_meta['title']}{part_label}",
                                     read_timeout=600,
                                     write_timeout=600,
                                     connect_timeout=60
                                 )
-                                file_id = sent_msg.audio.file_id
+                                file_id = bin_msg.audio.file_id if bin_msg else sent_msg.audio.file_id
                             break # Success, exit retry loop
                         except Exception as e:
                             logging.error(f"Upload failed (attempt {attempt+1}/{max_retries}): {e}")
