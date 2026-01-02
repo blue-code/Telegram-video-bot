@@ -37,7 +37,7 @@
 - [x] Task: Conductor - User Manual Verification 'Phase 4: Full Pipeline' (Protocol in workflow.md) 3891a1f
 
 ## Phase 5: 다시보기 및 스트리밍 (MVP 완성)
-- [ ] Task: 저장된 영상을 URL 기반으로 즉시 재전송하는 기능 구현
-  - [ ] Sub-task: File ID 조회 및 전송 테스트 코드 작성
-  - [ ] Sub-task: 캐시(DB) 확인 및 재전송 로직 구현
+- [x] Task: 저장된 영상을 URL 기반으로 즉시 재전송하는 기능 구현 799985e
+  - [x] Sub-task: File ID 조회 및 전송 테스트 코드 작성
+  - [x] Sub-task: 캐시(DB) 확인 및 재전송 로직 구현
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Streaming & MVP' (Protocol in workflow.md)
