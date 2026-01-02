@@ -27,14 +27,14 @@
   - [x] Sub-task: 화질 선택 메뉴 및 상태 관리 구현
 - [x] Task: Conductor - User Manual Verification 'Phase 3: Bot Interaction' (Protocol in workflow.md)
 
-## Phase 4: 다운로드 & 업로드 파이프라인
-- [ ] Task: 진행률 바가 포함된 다운로드 로직 구현
-  - [ ] Sub-task: 다운로드 콜백 테스트 코드 작성
-  - [ ] Sub-task: 실시간 메시지 업데이트 로직 구현
-- [ ] Task: 텔레그램 파일 업로드 및 File ID 저장 로직 구현
-  - [ ] Sub-task: 업로드 및 DB 저장 테스트 코드 작성
-  - [ ] Sub-task: 최종 파일 전송 및 DB 기록 구현
-- [ ] Task: Conductor - User Manual Verification 'Phase 4: Full Pipeline' (Protocol in workflow.md)
+## Phase 4: 다운로드 & 업로드 파이프라인 [checkpoint: 3891a1f]
+- [x] Task: 진행률 바가 포함된 다운로드 로직 구현 3891a1f
+  - [x] Sub-task: 다운로드 콜백 테스트 코드 작성
+  - [x] Sub-task: 실시간 메시지 업데이트 로직 구현
+- [x] Task: 텔레그램 파일 업로드 및 File ID 저장 로직 구현 3891a1f
+  - [x] Sub-task: 업로드 및 DB 저장 테스트 코드 작성
+  - [x] Sub-task: 최종 파일 전송 및 DB 기록 구현
+- [x] Task: Conductor - User Manual Verification 'Phase 4: Full Pipeline' (Protocol in workflow.md) 3891a1f
 
 ## Phase 5: 다시보기 및 스트리밍 (MVP 완성)
 - [ ] Task: 저장된 영상을 URL 기반으로 즉시 재전송하는 기능 구현
