@@ -43,9 +43,9 @@
 - [ ] Task: Conductor - User Manual Verification 'Phase 5: Streaming & MVP' (Protocol in workflow.md)
 
 ## Phase 6: 안정적인 저장소 (Bin Channel) [Pro]
-- [ ] Task: Bin Channel 연동 및 파일 관리 로직 구현
-  - [ ] Sub-task: 채널 ID 설정 및 포워딩 테스트 코드 작성
-  - [ ] Sub-task: 다운로드 파일을 Bin Channel로 업로드하고 사용자에게 포워딩하는 로직 구현
+- [x] Task: Bin Channel 연동 및 파일 관리 로직 구현 34afab1
+  - [x] Sub-task: 채널 ID 설정 및 포워딩 테스트 코드 작성
+  - [x] Sub-task: 다운로드 파일을 Bin Channel로 업로드하고 사용자에게 포워딩하는 로직 구현
 
 ## Phase 7: 웹 스트리밍 지원 (Direct Link) [Pro]
 - [ ] Task: FastAPI 기반 스트리밍 서버 구현
