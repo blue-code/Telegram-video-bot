@@ -71,15 +71,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if already in DB
     existing_video = await get_video_by_url(url)
     if existing_video:
-        await update.effective_message.reply_text(
-            f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n바로 보내드릴게요! (준비 중...)"
-        )
-        # In Phase 5, we'll implement immediate resend
         try:
-            await update.effective_message.reply_video(
-                video=existing_video['file_id'],
-                caption=f"다시 보기: {existing_video.get('title', '영상')}"
-            )
+            # Check for multiple parts in metadata
+            parts = existing_video.get('metadata', {}).get('parts', [])
+            
+            if parts:
+                await update.effective_message.reply_text(
+                    f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n총 {len(parts)}개의 파트로 나누어 보내드릴게요! (준비 중...)"
+                )
+                for part in parts:
+                    if part.get('type') == 'audio':
+                        await update.effective_message.reply_audio(
+                            audio=part['file_id'],
+                            caption=f"다시 보기: {existing_video.get('title', '오디오')}"
+                        )
+                    else:
+                        await update.effective_message.reply_video(
+                            video=part['file_id'],
+                            caption=f"다시 보기: {existing_video.get('title', '영상')}"
+                        )
+            else:
+                # Legacy single file support
+                await update.effective_message.reply_text(
+                    f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n바로 보내드릴게요! (준비 중...)"
+                )
+                await update.effective_message.reply_video(
+                    video=existing_video['file_id'],
+                    caption=f"다시 보기: {existing_video.get('title', '영상')}"
+                )
             return
         except Exception as e:
             logging.error(f"Cached send failed: {e}")
@@ -198,6 +217,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logging.info(f"Split completed. Number of parts: {len(parts)}")
             
             # 3. Upload to Telegram
+            uploaded_file_ids = []
             for i, part in enumerate(parts):
                 part_label = f" (Part {i+1}/{len(parts)})" if len(parts) > 1 else ""
                 logging.info(f"Uploading part {i+1}/{len(parts)}: {part}")
@@ -240,18 +260,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             # Reset file pointer for retry
                             video_file.seek(0)
 
-                    # 4. Save metadata to Supabase (only for the full file or first part)
-                    if i == 0:
+                    
+                    # Store file_id and type for bulk update
+                    uploaded_file_ids.append({
+                        "file_id": file_id,
+                        "type": "video" if part.lower().endswith('.mp4') else "audio"
+                    })
+
+                    # 4. Save metadata to Supabase (after last part)
+                    if i == len(parts) - 1:
                         db_data = {
                             "url": url,
-                            "file_id": file_id,
+                            "file_id": uploaded_file_ids[0]['file_id'], # Keep primary ID compatibility
                             "title": video_meta['title'],
                             "duration": video_meta['duration'],
                             "thumbnail": video_meta['thumbnail'],
-                            "metadata": {"quality": quality, "format_id": format_id}
+                            "metadata": {
+                                "quality": quality, 
+                                "format_id": format_id,
+                                "parts": uploaded_file_ids
+                            }
                         }
                         await save_video_metadata(db_data)
-                        logging.info("Metadata saved to database.")
+                        logging.info("Metadata saved to database with all parts.")
 
             logging.info("All parts uploaded successfully.")
             await status_message.delete()
