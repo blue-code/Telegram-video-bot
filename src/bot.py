@@ -86,18 +86,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             caption=f"다시 보기: {existing_video.get('title', '오디오')}"
                         )
                     else:
+                        stream_markup = InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{part['file_id']}")
+                        ]])
                         await update.effective_message.reply_video(
                             video=part['file_id'],
-                            caption=f"다시 보기: {existing_video.get('title', '영상')}"
+                            caption=f"다시 보기: {existing_video.get('title', '영상')}",
+                            reply_markup=stream_markup
                         )
             else:
                 # Legacy single file support
                 await update.effective_message.reply_text(
                     f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n바로 보내드릴게요! (준비 중...)"
                 )
+                
+                # Create Streaming Button
+                stream_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{existing_video['file_id']}")
+                ]])
+                
                 await update.effective_message.reply_video(
                     video=existing_video['file_id'],
-                    caption=f"다시 보기: {existing_video.get('title', '영상')}"
+                    caption=f"다시 보기: {existing_video.get('title', '영상')}",
+                    reply_markup=stream_markup
                 )
             return
         except Exception as e:
@@ -258,6 +269,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         video_file.seek(0)
 
                                 # 2. Send to User
+                                # Create Streaming Button
+                                stream_markup = InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{file_to_send}")
+                                ]])
+
                                 sent_msg = await context.bot.send_video(
                                     chat_id=query.message.chat_id,
                                     video=file_to_send,
@@ -265,7 +281,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     supports_streaming=True,
                                     read_timeout=600, 
                                     write_timeout=600, 
-                                    connect_timeout=60
+                                    connect_timeout=60,
+                                    reply_markup=stream_markup
                                 )
                                 file_id = bin_msg.video.file_id if bin_msg else sent_msg.video.file_id
                             else:
