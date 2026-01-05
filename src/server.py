@@ -779,12 +779,14 @@ async def upload_file(
 
         file_size = os.path.getsize(tmp_path)
         if file_size > MAX_WEB_UPLOAD_SIZE:
-            size_mb = file_size / (1024 * 1024)
-            limit_mb = MAX_WEB_UPLOAD_SIZE / (1024 * 1024)
-            raise Exception(
-                f"File too large for web upload ({size_mb:.1f}MB). "
-                f"Max allowed is {limit_mb:.0f}MB."
+            logger.info(
+                "File exceeds limit (%.1fMB), splitting into parts.",
+                file_size / (1024 * 1024)
             )
+            from src.splitter import split_video
+            parts = await split_video(tmp_path, MAX_WEB_UPLOAD_SIZE)
+        else:
+            parts = [tmp_path]
 
         # Get Telegram credentials
         bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -816,16 +818,6 @@ async def upload_file(
         )
         bot = Bot(token=bot_token, request=request)
 
-        logger.info(
-            "Uploading %s to Telegram chat_id=%s...",
-            file.filename,
-            upload_chat_id
-        )
-
-        file_id = None
-        duration = 0
-        thumbnail = ""
-
         async def send_with_retries(send_func, label):
             last_error = None
             for attempt in range(1, 4):
@@ -843,126 +835,176 @@ async def upload_file(
                         await asyncio.sleep(2 * attempt)
             raise last_error
 
-        async def send_video():
-            with open(tmp_path, "rb") as video_file:
+        async def send_video(path, caption):
+            with open(path, "rb") as video_file:
                 return await bot.send_video(
                     chat_id=upload_chat_id,
                     video=video_file,
-                    caption=(
-                        f"📤 <b>Web Upload</b>\n📁 {file.filename}\n"
-                        f"👤 User: {user_id}"
-                    ),
+                    caption=caption,
                     parse_mode=ParseMode.HTML,
                     supports_streaming=True
                 )
 
-        async def send_document():
-            with open(tmp_path, "rb") as video_file:
+        async def send_document(path, caption):
+            with open(path, "rb") as video_file:
                 return await bot.send_document(
                     chat_id=upload_chat_id,
                     document=video_file,
-                    caption=(
-                        f"📤 <b>Web Upload</b>\n📁 {file.filename}\n"
-                        f"👤 User: {user_id}"
-                    ),
+                    caption=caption,
                     parse_mode=ParseMode.HTML
                 )
 
-        try:
-            message = await send_with_retries(send_video, "send_video")
-            if not message.video:
-                raise Exception("Telegram did not return video metadata")
-            file_id = message.video.file_id
-            duration = message.video.duration or 0
-            thumbnail = (
-                message.video.thumbnail.file_id
-                if message.video.thumbnail else ""
+        async def upload_part(path, part_label):
+            caption = (
+                f"📤 <b>Web Upload</b>\n📁 {part_label}\n👤 User: {user_id}"
             )
-        except Exception as upload_error:
-            logger.warning(
-                "send_video failed for %s: %s",
-                file.filename,
-                upload_error
-            )
-            message = await send_with_retries(send_document, "send_document")
-            if not message.document:
-                raise Exception("Telegram upload failed")
-            file_id = message.document.file_id
-
-        logger.info("Upload successful! file_id: %s", file_id)
-
-        # Delete temporary file immediately
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-            logger.info("Temporary file deleted: %s", tmp_path)
+            try:
+                message = await send_with_retries(
+                    lambda: send_video(path, caption),
+                    "send_video"
+                )
+                if not message.video:
+                    raise Exception("Telegram did not return video metadata")
+                return (
+                    message.video.file_id,
+                    message.video.duration or 0,
+                    message.video.thumbnail.file_id
+                    if message.video.thumbnail else ""
+                )
+            except Exception as upload_error:
+                logger.warning(
+                    "send_video failed for %s: %s",
+                    part_label,
+                    upload_error
+                )
+                message = await send_with_retries(
+                    lambda: send_document(path, caption),
+                    "send_document"
+                )
+                if not message.document:
+                    raise Exception("Telegram upload failed")
+                return (message.document.file_id, 0, "")
 
         # Save metadata to database
         from src.db import get_database
+        from src.link_shortener import create_short_link
         sb = await get_database()
 
-        video_data = {
-            "file_id": file_id,
-            "title": file.filename,
-            "duration": duration,
-            "thumbnail": thumbnail,
-            "user_id": user_id,
-            "url": None  # No URL for local uploads
-        }
-
-        video_id = None
-        try:
-            result = await sb.table("videos").insert(video_data).execute()
-            if result.data:
-                video_id = result.data[0].get("id")
-            else:
-                logger.warning("Video insert returned no data: %s", result)
-        except Exception as db_error:
-            logger.error("Video metadata insert failed: %s", db_error)
-
-        if video_id is None:
+        async def save_video_entry(file_id, title, duration, thumbnail):
+            video_data = {
+                "file_id": file_id,
+                "title": title,
+                "duration": duration,
+                "thumbnail": thumbnail,
+                "user_id": user_id,
+                "url": None  # No URL for local uploads
+            }
+            video_id = None
             try:
-                lookup = await sb.table("videos").select("id").eq(
-                    "file_id", file_id
-                ).eq("user_id", user_id).order(
-                    "created_at",
-                    desc=True
-                ).limit(1).execute()
-                if lookup.data:
-                    video_id = lookup.data[0].get("id")
-            except Exception as lookup_error:
-                logger.warning(
-                    "Video lookup after insert failed: %s",
-                    lookup_error
+                result = await sb.table("videos").insert(video_data).execute()
+                if result.data:
+                    video_id = result.data[0].get("id")
+                else:
+                    logger.warning("Video insert returned no data: %s", result)
+            except Exception as db_error:
+                logger.error("Video metadata insert failed: %s", db_error)
+
+            if video_id is None:
+                try:
+                    lookup = await sb.table("videos").select("id").eq(
+                        "file_id", file_id
+                    ).eq("user_id", user_id).order(
+                        "created_at",
+                        desc=True
+                    ).limit(1).execute()
+                    if lookup.data:
+                        video_id = lookup.data[0].get("id")
+                except Exception as lookup_error:
+                    logger.warning(
+                        "Video lookup after insert failed: %s",
+                        lookup_error
+                    )
+
+            short_id = await create_short_link(sb, file_id, video_id, user_id)
+            return short_id
+
+        short_id = None
+        part_links = []
+        total_parts = len(parts)
+
+        for index, part_path in enumerate(parts, start=1):
+            if total_parts == 1:
+                part_title = file.filename
+            else:
+                part_title = (
+                    f"{Path(file.filename).stem} (Part {index}/{total_parts})"
+                    f"{Path(file.filename).suffix}"
                 )
 
-        # Create short link (required for playback)
-        from src.link_shortener import create_short_link
-        short_id = await create_short_link(sb, file_id, video_id, user_id)
+            logger.info(
+                "Uploading %s to Telegram chat_id=%s...",
+                part_title,
+                upload_chat_id
+            )
+            file_id, duration, thumbnail = await upload_part(
+                part_path,
+                part_title
+            )
+            part_short_id = await save_video_entry(
+                file_id,
+                part_title,
+                duration,
+                thumbnail
+            )
+            part_links.append({
+                "part": index,
+                "short_id": part_short_id,
+                "file_id": file_id
+            })
+            if short_id is None:
+                short_id = part_short_id
 
-        logger.info(
-            "Video metadata saved: video_id=%s, short_id=%s",
-            video_id,
-            short_id
+        logger.info("Upload successful! parts=%s", total_parts)
+
+        # Delete temporary file(s) immediately
+        for path in set(parts + [tmp_path]):
+            if path and os.path.exists(path):
+                os.unlink(path)
+                logger.info("Temporary file deleted: %s", path)
+
+        message = (
+            "✅ Uploaded to Telegram successfully!"
+            if total_parts == 1
+            else f"✅ Uploaded {total_parts} parts to Telegram successfully!"
         )
 
         return {
             "success": True,
             "short_id": short_id,
             "filename": file.filename,
-            "file_id": file_id,
-            "message": "✅ Uploaded to Telegram successfully!"
+            "file_id": part_links[0]["file_id"] if part_links else None,
+            "parts": part_links,
+            "message": message
         }
 
     except Exception as e:
         logger.error("File upload error: %s", e)
 
         # Cleanup temporary file on error
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-                logger.info("Cleaned up temporary file after error: %s", tmp_path)
-            except Exception as cleanup_error:
-                logger.error("Failed to cleanup temp file: %s", cleanup_error)
+        paths_to_cleanup = set()
+        if tmp_path:
+            paths_to_cleanup.add(tmp_path)
+        for path in locals().get("parts", []):
+            if path:
+                paths_to_cleanup.add(path)
+
+        for path in paths_to_cleanup:
+            if os.path.exists(path):
+                try:
+                    os.unlink(path)
+                    logger.info("Cleaned up temporary file after error: %s", path)
+                except Exception as cleanup_error:
+                    logger.error("Failed to cleanup temp file: %s", cleanup_error)
 
         return {
             "success": False,
