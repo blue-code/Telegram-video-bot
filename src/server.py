@@ -20,6 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TVB API", version="1.0.0")
+DEFAULT_USER_ID = 41509535
 
 # Add CORS middleware
 app.add_middleware(
@@ -227,6 +228,12 @@ async def gallery_page(request: Request, user_id: int):
             "error_code": 500,
             "error_message": "Could not load gallery"
         })
+
+
+@app.get("/gallery", response_class=HTMLResponse)
+async def gallery_default_page(request: Request):
+    """Default gallery page using fallback user_id"""
+    return await gallery_page(request, DEFAULT_USER_ID)
 
 
 # REST API Endpoints
@@ -475,18 +482,25 @@ async def get_favorites(
 
 # Phase 1: Web Download Page
 @app.get("/download", response_class=HTMLResponse)
-async def download_page(request: Request):
+async def download_page(request: Request, user_id: Optional[int] = None):
     """Web download page"""
-    return templates.TemplateResponse("download.html", {"request": request})
+    if not user_id:
+        user_id = DEFAULT_USER_ID
+    return templates.TemplateResponse("download.html", {
+        "request": request,
+        "user_id": user_id
+    })
 
 
 @app.post("/api/web-download")
 async def web_download(
     url: str = Body(...),
     quality: str = Body("best"),
-    user_id: int = Body(...)
+    user_id: Optional[int] = Body(None)
 ):
     """Handle web-based video download - uploads to Telegram"""
+    if not user_id:
+        user_id = DEFAULT_USER_ID
     downloaded_file = None
     temp_dir = None
     
@@ -677,11 +691,17 @@ async def dashboard_page(request: Request, user_id: int):
         })
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_default_page(request: Request):
+    """Default dashboard page using fallback user_id"""
+    return await dashboard_page(request, DEFAULT_USER_ID)
+
+
 # Phase 1: Advanced Search Page
 @app.get("/search", response_class=HTMLResponse)
 async def search_page(
     request: Request,
-    user_id: int,
+    user_id: Optional[int] = None,
     q: str = "",
     date_from: str = "",
     date_to: str = "",
@@ -692,6 +712,8 @@ async def search_page(
     from src.db import search_videos
     
     try:
+        if not user_id:
+            user_id = DEFAULT_USER_ID
         # Search videos with filters
         results = await search_videos(
             user_id=user_id,
@@ -734,12 +756,14 @@ async def search_page(
 @app.post("/api/upload-file")
 async def upload_file(
     file: UploadFile = File(...),
-    user_id: int = Form(...)
+    user_id: Optional[int] = Form(None)
 ):
     """Upload local video file to Telegram (not local storage)"""
     tmp_path = None
     
     try:
+        if not user_id:
+            user_id = DEFAULT_USER_ID
         # Save to temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
             shutil.copyfileobj(file.file, tmp_file)
@@ -747,26 +771,39 @@ async def upload_file(
         
         logger.info(f"Temporary file saved: {tmp_path}")
         
-        # Get Telegram credentials
-        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-        bin_channel_id = os.getenv("BIN_CHANNEL_ID")
-        
-        if not bot_token:
-            raise Exception("TELEGRAM_BOT_TOKEN not configured in .env")
-        if not bin_channel_id:
-            raise Exception("BIN_CHANNEL_ID not configured in .env")
-        
-        # Upload to Telegram
-        from telegram import Bot
-        from telegram.constants import ParseMode
-        
-        bot = Bot(token=bot_token)
-        
-        logger.info(f"Uploading {file.filename} to Telegram BIN_CHANNEL...")
-        
-        with open(tmp_path, 'rb') as video_file:
+    # Get Telegram credentials
+    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+    bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+    
+    if not bot_token:
+        raise Exception("TELEGRAM_BOT_TOKEN not configured in .env")
+    
+    upload_chat_id = user_id
+    if bin_channel_id:
+        bin_channel_id = bin_channel_id.strip()
+        try:
+            upload_chat_id = int(bin_channel_id)
+        except ValueError:
+            upload_chat_id = bin_channel_id
+    else:
+        logger.info("BIN_CHANNEL_ID not set; uploading to user_id=%s", user_id)
+    
+    # Upload to Telegram
+    from telegram import Bot
+    from telegram.constants import ParseMode
+    
+    bot = Bot(token=bot_token)
+    
+    logger.info("Uploading %s to Telegram chat_id=%s...", file.filename, upload_chat_id)
+    
+    file_id = None
+    duration = 0
+    thumbnail = ""
+    
+    with open(tmp_path, 'rb') as video_file:
+        try:
             message = await bot.send_video(
-                chat_id=bin_channel_id,
+                chat_id=upload_chat_id,
                 video=video_file,
                 caption=f"📤 <b>Web Upload</b>\n📁 {file.filename}\n👤 User: {user_id}",
                 parse_mode=ParseMode.HTML,
@@ -775,59 +812,80 @@ async def upload_file(
                 write_timeout=300,
                 connect_timeout=60
             )
-        
-        logger.info(f"Upload successful! file_id: {message.video.file_id}")
-        
-        # Delete temporary file immediately
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-            logger.info(f"Temporary file deleted: {tmp_path}")
-        
-        # Get video metadata from Telegram
-        file_id = message.video.file_id
-        duration = message.video.duration or 0
-        thumbnail = message.video.thumbnail.file_id if message.video.thumbnail else ""
-        
-        # Generate short link
-        from src.link_shortener import generate_short_id
-        short_id = generate_short_id()
-        
-        # Save metadata to database
-        from src.db import get_database
-        sb = await get_database()
-        
-        video_data = {
-            "file_id": file_id,
-            "title": file.filename,
-            "duration": duration,
-            "thumbnail": thumbnail,
-            "user_id": user_id,
-            "url": None  # No URL for local uploads
-        }
-        
+            if not message.video:
+                raise Exception("Telegram did not return video metadata")
+            file_id = message.video.file_id
+            duration = message.video.duration or 0
+            thumbnail = message.video.thumbnail.file_id if message.video.thumbnail else ""
+        except Exception as upload_error:
+            logger.warning("send_video failed for %s: %s", file.filename, upload_error)
+            video_file.seek(0)
+            message = await bot.send_document(
+                chat_id=upload_chat_id,
+                document=video_file,
+                caption=f"📤 <b>Web Upload</b>\n📁 {file.filename}\n👤 User: {user_id}",
+                parse_mode=ParseMode.HTML,
+                read_timeout=300,
+                write_timeout=300,
+                connect_timeout=60
+            )
+            if not message.document:
+                raise Exception("Telegram upload failed")
+            file_id = message.document.file_id
+    
+    logger.info("Upload successful! file_id: %s", file_id)
+    
+    # Delete temporary file immediately
+    if tmp_path and os.path.exists(tmp_path):
+        os.unlink(tmp_path)
+        logger.info(f"Temporary file deleted: {tmp_path}")
+    
+    # Save metadata to database
+    from src.db import get_database
+    sb = await get_database()
+    
+    video_data = {
+        "file_id": file_id,
+        "title": file.filename,
+        "duration": duration,
+        "thumbnail": thumbnail,
+        "user_id": user_id,
+        "url": None  # No URL for local uploads
+    }
+    
+    video_id = None
+    try:
         result = await sb.table("videos").insert(video_data).execute()
-        
         if result.data:
-            video_id = result.data[0]['id']
-            
-            # Create short link
-            await sb.table("shared_links").insert({
-                "short_id": short_id,
-                "file_id": file_id,
-                "video_id": video_id,
-                "user_id": user_id,
-                "views": 0
-            }).execute()
-        
-        logger.info(f"Video metadata saved: video_id={video_id}, short_id={short_id}")
-        
-        return {
-            "success": True,
-            "short_id": short_id,
-            "filename": file.filename,
-            "file_id": file_id,
-            "message": "✅ Uploaded to Telegram successfully!"
-        }
+            video_id = result.data[0].get('id')
+        else:
+            logger.warning("Video insert returned no data: %s", result)
+    except Exception as db_error:
+        logger.error("Video metadata insert failed: %s", db_error)
+
+    if video_id is None:
+        try:
+            lookup = await sb.table("videos").select("id").eq(
+                "file_id", file_id
+            ).eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
+            if lookup.data:
+                video_id = lookup.data[0].get("id")
+        except Exception as lookup_error:
+            logger.warning("Video lookup after insert failed: %s", lookup_error)
+    
+    # Create short link (required for playback)
+    from src.link_shortener import create_short_link
+    short_id = await create_short_link(sb, file_id, video_id, user_id)
+    
+    logger.info("Video metadata saved: video_id=%s, short_id=%s", video_id, short_id)
+    
+    return {
+        "success": True,
+        "short_id": short_id,
+        "filename": file.filename,
+        "file_id": file_id,
+        "message": "✅ Uploaded to Telegram successfully!"
+    }
         
     except Exception as e:
         logger.error(f"File upload error: {e}")
@@ -848,11 +906,13 @@ async def upload_file(
 
 # Phase 3: Video Editing Features
 @app.get("/edit/{video_id}", response_class=HTMLResponse)
-async def edit_page(request: Request, video_id: int, user_id: int):
+async def edit_page(request: Request, video_id: int, user_id: Optional[int] = None):
     """Video editing page"""
     from src.db import get_video_by_id
     
     try:
+        if not user_id:
+            user_id = DEFAULT_USER_ID
         video = await get_video_by_id(video_id)
         
         if not video or video.get('user_id') != user_id:

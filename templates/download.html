@@ -325,6 +325,7 @@
                             type="number" 
                             id="user-id" 
                             placeholder="Enter your user ID" 
+                            value="{{ user_id if user_id is not none else '' }}"
                             required
                         >
                     </div>
@@ -370,6 +371,7 @@
                             type="number" 
                             id="upload-user-id" 
                             placeholder="Enter your user ID" 
+                            value="{{ user_id if user_id is not none else '' }}"
                             required
                         >
                     </div>
@@ -403,6 +405,8 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');
         }
+
+        const presetUserId = "{{ user_id if user_id is not none else '' }}";
 
         // Tab switching
         const tabs = document.querySelectorAll('.tab');
@@ -438,7 +442,8 @@
             
             const url = document.getElementById('video-url').value;
             const quality = document.getElementById('quality').value;
-            const userId = document.getElementById('user-id').value;
+            const userIdValue = document.getElementById('user-id').value || presetUserId;
+            const userId = parseInt(userIdValue, 10) || parseInt(presetUserId, 10);
 
             // Show progress
             urlProgress.classList.add('active');
@@ -456,7 +461,7 @@
                     body: JSON.stringify({
                         url: url,
                         quality: quality,
-                        user_id: parseInt(userId)
+                        user_id: userId
                     })
                 });
 
@@ -547,7 +552,7 @@
             
             if (selectedFiles.length === 0) return;
 
-            const userId = document.getElementById('upload-user-id').value;
+            const userId = document.getElementById('upload-user-id').value || presetUserId;
 
             uploadProgress.classList.add('active');
             uploadResult.classList.remove('active');
@@ -598,6 +603,10 @@
         function resetForms() {
             urlForm.reset();
             uploadForm.reset();
+            if (presetUserId) {
+                document.getElementById('user-id').value = presetUserId;
+                document.getElementById('upload-user-id').value = presetUserId;
+            }
             selectedFiles = [];
             selectedFile.classList.remove('active');
             uploadBtn.disabled = true;
