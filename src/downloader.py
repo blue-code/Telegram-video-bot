@@ -7,10 +7,12 @@ async def extract_video_info(url: str):
     """
     Asynchronously extracts video information using yt-dlp.
     Does not download the video.
+    Returns playlist info if URL is a playlist, otherwise single video info.
     """
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
+        'extract_flat': 'in_playlist',  # For playlists, just get metadata
     }
 
     # Run blocking yt_dlp call in a separate thread
@@ -19,15 +21,36 @@ async def extract_video_info(url: str):
         # Partial allows passing arguments to the function
         func = partial(ydl.extract_info, url, download=False)
         info = await loop.run_in_executor(None, func)
-        
-    return {
-        'id': info.get('id'),
-        'title': info.get('title'),
-        'duration': info.get('duration'),
-        'thumbnail': info.get('thumbnail'),
-        'formats': info.get('formats', []),
-        'webpage_url': info.get('webpage_url')
-    }
+    
+    # Check if it's a playlist
+    if info.get('_type') == 'playlist' or 'entries' in info:
+        entries = list(info.get('entries', []))
+        return {
+            'is_playlist': True,
+            'id': info.get('id'),
+            'title': info.get('title', 'Unnamed Playlist'),
+            'count': len(entries),
+            'entries': [
+                {
+                    'id': e.get('id'),
+                    'title': e.get('title'),
+                    'url': e.get('url') or e.get('webpage_url'),
+                    'duration': e.get('duration'),
+                }
+                for e in entries if e
+            ],
+            'webpage_url': info.get('webpage_url')
+        }
+    else:
+        return {
+            'is_playlist': False,
+            'id': info.get('id'),
+            'title': info.get('title'),
+            'duration': info.get('duration'),
+            'thumbnail': info.get('thumbnail'),
+            'formats': info.get('formats', []),
+            'webpage_url': info.get('webpage_url')
+        }
 
 async def download_video(url: str, format_id: str, output_path: str, progress_hook=None):
     """

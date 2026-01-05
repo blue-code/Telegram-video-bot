@@ -120,11 +120,55 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         info = await extract_video_info(url)
         
+        # Check if it's a playlist
+        if info.get('is_playlist'):
+            # Handle playlist
+            playlist_id = info['id']
+            playlist_title = info['title']
+            video_count = info['count']
+            entries = info['entries']
+            
+            # Store playlist info in user_data
+            context.user_data[f"playlist_{playlist_id}"] = {
+                'title': playlist_title,
+                'entries': entries,
+                'url': url
+            }
+            
+            # Create buttons for playlist actions
+            buttons = [
+                [InlineKeyboardButton(f"📥 전체 다운로드 ({video_count}개)", callback_data=f"pl_all|{playlist_id}|best|720")],
+                [InlineKeyboardButton("🎵 전체 MP3 다운로드", callback_data=f"pl_all|{playlist_id}|bestaudio|mp3")],
+            ]
+            
+            # Show first 5 videos as individual options
+            for i, entry in enumerate(entries[:5]):
+                buttons.append([InlineKeyboardButton(
+                    f"▶️ {i+1}. {entry['title'][:30]}...",
+                    callback_data=f"pl_single|{playlist_id}|{i}|best"
+                )])
+            
+            if video_count > 5:
+                buttons.append([InlineKeyboardButton(f"... 외 {video_count - 5}개 더보기", callback_data=f"pl_more|{playlist_id}")])
+            
+            reply_markup = InlineKeyboardMarkup(buttons)
+            
+            await status_message.edit_text(
+                f"🎬 **플레이리스트 감지됨!**\n\n"
+                f"**{playlist_title}**\n"
+                f"총 **{video_count}**개의 영상이 있습니다.\n\n"
+                f"아래에서 원하는 옵션을 선택해 주세요!",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Single video handling (existing logic)
         # Filter formats to show useful options (e.g., mp4 with height)
         seen_heights = set()
         buttons = []
         
-        for f in info['formats']:
+        for f in info.get('formats', []):
             h = f.get('height')
             if h and h not in seen_heights and f.get('ext') == 'mp4':
                 seen_heights.add(h)
@@ -143,7 +187,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'url': url,
             'title': info['title'],
             'duration': info['duration'],
-            'thumbnail': info['thumbnail']
+            'thumbnail': info.get('thumbnail')
         }
         
         await status_message.edit_text(
@@ -163,6 +207,160 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     data = query.data.split('|')
+    
+    # Handle Playlist - Download All
+    if data[0] == 'pl_all':
+        playlist_id = data[1]
+        format_id = data[2]
+        quality = data[3]
+        
+        playlist_data = context.user_data.get(f"playlist_{playlist_id}")
+        if not playlist_data:
+            await query.edit_message_text("죄송합니다. 세션이 만료되었습니다. 링크를 다시 보내주세요! 🔄")
+            return
+        
+        entries = playlist_data['entries']
+        playlist_title = playlist_data['title']
+        total = len(entries)
+        
+        status_message = await query.edit_message_text(
+            f"🎬 **{playlist_title}**\n\n"
+            f"총 {total}개의 영상을 순차적으로 다운로드합니다...\n"
+            f"잠시만 기다려 주세요! ⏳",
+            parse_mode='Markdown'
+        )
+        
+        success_count = 0
+        fail_count = 0
+        
+        for i, entry in enumerate(entries):
+            try:
+                await status_message.edit_text(
+                    f"🎬 **{playlist_title}**\n\n"
+                    f"진행 중: [{i+1}/{total}] {entry['title'][:30]}...\n"
+                    f"✅ 성공: {success_count} | ❌ 실패: {fail_count}",
+                    parse_mode='Markdown'
+                )
+                
+                video_url = entry['url']
+                if not video_url:
+                    video_url = f"https://www.youtube.com/watch?v={entry['id']}"
+                
+                # Store video meta for download
+                context.user_data[entry['id']] = {
+                    'url': video_url,
+                    'title': entry['title'],
+                    'duration': entry.get('duration'),
+                    'thumbnail': None
+                }
+                
+                # Download and upload (reuse existing logic)
+                os.makedirs("downloads", exist_ok=True)
+                file_path = await download_video(video_url, format_id, "downloads")
+                
+                if os.path.exists(file_path):
+                    parts = await split_video(file_path, MAX_FILE_SIZE)
+                    
+                    for part in parts:
+                        with open(part, 'rb') as video_file:
+                            # Upload to Bin Channel first if configured
+                            bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+                            file_to_send = video_file
+                            
+                            if bin_channel_id:
+                                try:
+                                    video_file.seek(0)
+                                    if part.lower().endswith('.mp4'):
+                                        bin_msg = await context.bot.send_video(
+                                            chat_id=int(bin_channel_id),
+                                            video=video_file,
+                                            caption=f"{entry['title']}\n\nPlaylist: {playlist_title}",
+                                            supports_streaming=True,
+                                            read_timeout=600, write_timeout=600, connect_timeout=60
+                                        )
+                                        file_to_send = bin_msg.video.file_id
+                                    else:
+                                        bin_msg = await context.bot.send_audio(
+                                            chat_id=int(bin_channel_id),
+                                            audio=video_file,
+                                            caption=f"{entry['title']}\n\nPlaylist: {playlist_title}",
+                                            read_timeout=600, write_timeout=600, connect_timeout=60
+                                        )
+                                        file_to_send = bin_msg.audio.file_id
+                                except Exception as e:
+                                    logging.error(f"Bin channel upload failed: {e}")
+                                    video_file.seek(0)
+                            
+                            # Send to user
+                            stream_markup = InlineKeyboardMarkup([[
+                                InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{file_to_send}")
+                            ]])
+                            
+                            if part.lower().endswith('.mp4'):
+                                await context.bot.send_video(
+                                    chat_id=query.message.chat_id,
+                                    video=file_to_send,
+                                    caption=f"[{i+1}/{total}] {entry['title']}",
+                                    supports_streaming=True,
+                                    reply_markup=stream_markup
+                                )
+                            else:
+                                await context.bot.send_audio(
+                                    chat_id=query.message.chat_id,
+                                    audio=file_to_send,
+                                    caption=f"[{i+1}/{total}] {entry['title']}"
+                                )
+                        
+                        # Cleanup
+                        if os.path.exists(part):
+                            os.remove(part)
+                    
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    
+                    success_count += 1
+                else:
+                    fail_count += 1
+                    
+            except Exception as e:
+                logging.error(f"Playlist item download failed: {e}")
+                fail_count += 1
+        
+        await status_message.edit_text(
+            f"🎬 **{playlist_title}** 다운로드 완료!\n\n"
+            f"✅ 성공: {success_count}개\n"
+            f"❌ 실패: {fail_count}개",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Handle Playlist - Single Video
+    elif data[0] == 'pl_single':
+        playlist_id = data[1]
+        video_index = int(data[2])
+        quality = data[3]
+        
+        playlist_data = context.user_data.get(f"playlist_{playlist_id}")
+        if not playlist_data or video_index >= len(playlist_data['entries']):
+            await query.edit_message_text("죄송합니다. 세션이 만료되었습니다. 링크를 다시 보내주세요! 🔄")
+            return
+        
+        entry = playlist_data['entries'][video_index]
+        video_url = entry['url'] or f"https://www.youtube.com/watch?v={entry['id']}"
+        
+        # Store as single video and trigger normal download flow
+        context.user_data[entry['id']] = {
+            'url': video_url,
+            'title': entry['title'],
+            'duration': entry.get('duration'),
+            'thumbnail': None
+        }
+        
+        # Modify callback data to trigger normal 'dl' flow
+        query.data = f"dl|{entry['id']}|best|720"
+        data = query.data.split('|')
+        # Fall through to the 'dl' handler below
+    
     if data[0] == 'dl':
         video_id = data[1]
         format_id = data[2]
