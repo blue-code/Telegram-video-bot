@@ -760,144 +760,175 @@ async def upload_file(
 ):
     """Upload local video file to Telegram (not local storage)"""
     tmp_path = None
-    
+
     try:
         if not user_id:
             user_id = DEFAULT_USER_ID
+
         # Save to temporary file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            suffix=Path(file.filename).suffix
+        ) as tmp_file:
             shutil.copyfileobj(file.file, tmp_file)
             tmp_path = tmp_file.name
-        
-        logger.info(f"Temporary file saved: {tmp_path}")
-        
-    # Get Telegram credentials
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    bin_channel_id = os.getenv("BIN_CHANNEL_ID")
-    
-    if not bot_token:
-        raise Exception("TELEGRAM_BOT_TOKEN not configured in .env")
-    
-    upload_chat_id = user_id
-    if bin_channel_id:
-        bin_channel_id = bin_channel_id.strip()
-        try:
-            upload_chat_id = int(bin_channel_id)
-        except ValueError:
-            upload_chat_id = bin_channel_id
-    else:
-        logger.info("BIN_CHANNEL_ID not set; uploading to user_id=%s", user_id)
-    
-    # Upload to Telegram
-    from telegram import Bot
-    from telegram.constants import ParseMode
-    
-    bot = Bot(token=bot_token)
-    
-    logger.info("Uploading %s to Telegram chat_id=%s...", file.filename, upload_chat_id)
-    
-    file_id = None
-    duration = 0
-    thumbnail = ""
-    
-    with open(tmp_path, 'rb') as video_file:
-        try:
-            message = await bot.send_video(
-                chat_id=upload_chat_id,
-                video=video_file,
-                caption=f"📤 <b>Web Upload</b>\n📁 {file.filename}\n👤 User: {user_id}",
-                parse_mode=ParseMode.HTML,
-                supports_streaming=True,
-                read_timeout=300,
-                write_timeout=300,
-                connect_timeout=60
-            )
-            if not message.video:
-                raise Exception("Telegram did not return video metadata")
-            file_id = message.video.file_id
-            duration = message.video.duration or 0
-            thumbnail = message.video.thumbnail.file_id if message.video.thumbnail else ""
-        except Exception as upload_error:
-            logger.warning("send_video failed for %s: %s", file.filename, upload_error)
-            video_file.seek(0)
-            message = await bot.send_document(
-                chat_id=upload_chat_id,
-                document=video_file,
-                caption=f"📤 <b>Web Upload</b>\n📁 {file.filename}\n👤 User: {user_id}",
-                parse_mode=ParseMode.HTML,
-                read_timeout=300,
-                write_timeout=300,
-                connect_timeout=60
-            )
-            if not message.document:
-                raise Exception("Telegram upload failed")
-            file_id = message.document.file_id
-    
-    logger.info("Upload successful! file_id: %s", file_id)
-    
-    # Delete temporary file immediately
-    if tmp_path and os.path.exists(tmp_path):
-        os.unlink(tmp_path)
-        logger.info(f"Temporary file deleted: {tmp_path}")
-    
-    # Save metadata to database
-    from src.db import get_database
-    sb = await get_database()
-    
-    video_data = {
-        "file_id": file_id,
-        "title": file.filename,
-        "duration": duration,
-        "thumbnail": thumbnail,
-        "user_id": user_id,
-        "url": None  # No URL for local uploads
-    }
-    
-    video_id = None
-    try:
-        result = await sb.table("videos").insert(video_data).execute()
-        if result.data:
-            video_id = result.data[0].get('id')
-        else:
-            logger.warning("Video insert returned no data: %s", result)
-    except Exception as db_error:
-        logger.error("Video metadata insert failed: %s", db_error)
 
-    if video_id is None:
+        logger.info("Temporary file saved: %s", tmp_path)
+
+        # Get Telegram credentials
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+
+        if not bot_token:
+            raise Exception("TELEGRAM_BOT_TOKEN not configured in .env")
+
+        upload_chat_id = user_id
+        if bin_channel_id:
+            bin_channel_id = bin_channel_id.strip()
+            try:
+                upload_chat_id = int(bin_channel_id)
+            except ValueError:
+                upload_chat_id = bin_channel_id
+        else:
+            logger.info("BIN_CHANNEL_ID not set; uploading to user_id=%s", user_id)
+
+        # Upload to Telegram
+        from telegram import Bot
+        from telegram.constants import ParseMode
+
+        bot = Bot(token=bot_token)
+
+        logger.info(
+            "Uploading %s to Telegram chat_id=%s...",
+            file.filename,
+            upload_chat_id
+        )
+
+        file_id = None
+        duration = 0
+        thumbnail = ""
+
+        with open(tmp_path, "rb") as video_file:
+            try:
+                message = await bot.send_video(
+                    chat_id=upload_chat_id,
+                    video=video_file,
+                    caption=(
+                        f"📤 <b>Web Upload</b>\n📁 {file.filename}\n"
+                        f"👤 User: {user_id}"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                    supports_streaming=True,
+                    read_timeout=300,
+                    write_timeout=300,
+                    connect_timeout=60
+                )
+                if not message.video:
+                    raise Exception("Telegram did not return video metadata")
+                file_id = message.video.file_id
+                duration = message.video.duration or 0
+                thumbnail = (
+                    message.video.thumbnail.file_id
+                    if message.video.thumbnail else ""
+                )
+            except Exception as upload_error:
+                logger.warning(
+                    "send_video failed for %s: %s",
+                    file.filename,
+                    upload_error
+                )
+                video_file.seek(0)
+                message = await bot.send_document(
+                    chat_id=upload_chat_id,
+                    document=video_file,
+                    caption=(
+                        f"📤 <b>Web Upload</b>\n📁 {file.filename}\n"
+                        f"👤 User: {user_id}"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                    read_timeout=300,
+                    write_timeout=300,
+                    connect_timeout=60
+                )
+                if not message.document:
+                    raise Exception("Telegram upload failed")
+                file_id = message.document.file_id
+
+        logger.info("Upload successful! file_id: %s", file_id)
+
+        # Delete temporary file immediately
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+            logger.info("Temporary file deleted: %s", tmp_path)
+
+        # Save metadata to database
+        from src.db import get_database
+        sb = await get_database()
+
+        video_data = {
+            "file_id": file_id,
+            "title": file.filename,
+            "duration": duration,
+            "thumbnail": thumbnail,
+            "user_id": user_id,
+            "url": None  # No URL for local uploads
+        }
+
+        video_id = None
         try:
-            lookup = await sb.table("videos").select("id").eq(
-                "file_id", file_id
-            ).eq("user_id", user_id).order("created_at", desc=True).limit(1).execute()
-            if lookup.data:
-                video_id = lookup.data[0].get("id")
-        except Exception as lookup_error:
-            logger.warning("Video lookup after insert failed: %s", lookup_error)
-    
-    # Create short link (required for playback)
-    from src.link_shortener import create_short_link
-    short_id = await create_short_link(sb, file_id, video_id, user_id)
-    
-    logger.info("Video metadata saved: video_id=%s, short_id=%s", video_id, short_id)
-    
-    return {
-        "success": True,
-        "short_id": short_id,
-        "filename": file.filename,
-        "file_id": file_id,
-        "message": "✅ Uploaded to Telegram successfully!"
-    }
-        
+            result = await sb.table("videos").insert(video_data).execute()
+            if result.data:
+                video_id = result.data[0].get("id")
+            else:
+                logger.warning("Video insert returned no data: %s", result)
+        except Exception as db_error:
+            logger.error("Video metadata insert failed: %s", db_error)
+
+        if video_id is None:
+            try:
+                lookup = await sb.table("videos").select("id").eq(
+                    "file_id", file_id
+                ).eq("user_id", user_id).order(
+                    "created_at",
+                    desc=True
+                ).limit(1).execute()
+                if lookup.data:
+                    video_id = lookup.data[0].get("id")
+            except Exception as lookup_error:
+                logger.warning(
+                    "Video lookup after insert failed: %s",
+                    lookup_error
+                )
+
+        # Create short link (required for playback)
+        from src.link_shortener import create_short_link
+        short_id = await create_short_link(sb, file_id, video_id, user_id)
+
+        logger.info(
+            "Video metadata saved: video_id=%s, short_id=%s",
+            video_id,
+            short_id
+        )
+
+        return {
+            "success": True,
+            "short_id": short_id,
+            "filename": file.filename,
+            "file_id": file_id,
+            "message": "✅ Uploaded to Telegram successfully!"
+        }
+
     except Exception as e:
-        logger.error(f"File upload error: {e}")
-        
+        logger.error("File upload error: %s", e)
+
         # Cleanup temporary file on error
         if tmp_path and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-                logger.info(f"Cleaned up temporary file after error: {tmp_path}")
+                logger.info("Cleaned up temporary file after error: %s", tmp_path)
             except Exception as cleanup_error:
-                logger.error(f"Failed to cleanup temp file: {cleanup_error}")
-        
+                logger.error("Failed to cleanup temp file: %s", cleanup_error)
+
         return {
             "success": False,
             "message": str(e)
