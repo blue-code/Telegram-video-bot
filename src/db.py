@@ -440,3 +440,75 @@ async def get_favorite_videos(user_id: int):
         List of favorite video metadata
     """
     return await get_user_favorites(user_id, limit=100, offset=0)
+
+
+async def search_videos(
+    user_id: int,
+    query: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    duration_filter: str = "all",
+    sort_by: str = "latest",
+    limit: int = 100
+):
+    """Advanced search with filters"""
+    sb = await get_database()
+    
+    # Build query
+    q = sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id)
+    
+    # Text search
+    if query:
+        q = q.ilike("title", f"%{query}%")
+    
+    # Date range filter
+    if date_from:
+        q = q.gte("created_at", date_from)
+    if date_to:
+        q = q.lte("created_at", date_to)
+    
+    # Duration filter
+    if duration_filter == "short":
+        q = q.lt("duration", 300)  # < 5 min
+    elif duration_filter == "medium":
+        q = q.gte("duration", 300).lte("duration", 1200)  # 5-20 min
+    elif duration_filter == "long":
+        q = q.gt("duration", 1200)  # > 20 min
+    
+    # Sorting
+    if sort_by == "latest":
+        q = q.order("created_at", desc=True)
+    elif sort_by == "views":
+        q = q.order("views", desc=True)
+    elif sort_by == "title":
+        q = q.order("title", desc=False)
+    elif sort_by == "duration":
+        q = q.order("duration", desc=True)
+    
+    q = q.limit(limit)
+    result = await q.execute()
+    
+    return result.data if result.data else []
+
+
+async def update_video_metadata(
+    video_id: int,
+    user_id: int,
+    title: str = None,
+    description: str = None,
+    tags: list = None
+):
+    """Update video metadata"""
+    sb = await get_database()
+    
+    update_data = {}
+    if title:
+        update_data['title'] = title
+    if description:
+        update_data['description'] = description
+    if tags is not None:
+        update_data['tags'] = tags
+    
+    result = await sb.table(VIDEO_TABLE).update(update_data).eq("id", video_id).eq("user_id", user_id).execute()
+    
+    return len(result.data) > 0

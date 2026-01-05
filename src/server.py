@@ -1,7 +1,8 @@
-from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi import FastAPI, HTTPException, Request, Header, Body, File, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import os
 import httpx
 import logging
@@ -9,6 +10,7 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import Optional
+from pathlib import Path
 
 # Initialize
 load_dotenv()
@@ -27,6 +29,10 @@ app.add_middleware(
 )
 
 templates = Jinja2Templates(directory="templates")
+
+# Create static directory if not exists and mount it
+Path("static").mkdir(exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # Utility Functions
@@ -463,3 +469,286 @@ async def get_favorites(
     except Exception as e:
         logger.error(f"Error getting favorites: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Phase 1: Web Download Page
+@app.get("/download", response_class=HTMLResponse)
+async def download_page(request: Request):
+    """Web download page"""
+    return templates.TemplateResponse("download.html", {"request": request})
+
+
+@app.post("/api/web-download")
+async def web_download(
+    url: str = Body(...),
+    quality: str = Body("best"),
+    user_id: int = Body(...)
+):
+    """Handle web-based video download"""
+    from src.downloader import extract_video_info
+    from src.link_shortener import generate_short_id
+    from src.db import get_database
+    
+    try:
+        # Extract video info (not downloading yet, just metadata)
+        info = await extract_video_info(url)
+        
+        if info.get('is_playlist'):
+            return {
+                "success": False,
+                "message": "Playlist downloads not supported via web interface"
+            }
+        
+        # Generate short link
+        short_id = generate_short_id()
+        
+        # Save to database
+        sb = await get_database()
+        
+        # Insert video metadata
+        video_data = {
+            "file_id": f"web_{short_id}",  # Temporary file_id for web downloads
+            "title": info.get('title', 'Unknown'),
+            "duration": info.get('duration', 0),
+            "thumbnail": info.get('thumbnail', ''),
+            "url": url,
+            "user_id": user_id,
+            "quality": quality
+        }
+        
+        result = await sb.table("videos").insert(video_data).execute()
+        
+        if result.data:
+            video_id = result.data[0]['id']
+            
+            # Create short link
+            await sb.table("shared_links").insert({
+                "short_id": short_id,
+                "file_id": video_data['file_id'],
+                "video_id": video_id,
+                "user_id": user_id,
+                "views": 0
+            }).execute()
+        
+        return {
+            "success": True,
+            "short_id": short_id,
+            "title": info.get('title', 'Unknown'),
+            "message": "Download complete!"
+        }
+    except Exception as e:
+        logger.error(f"Web download error: {e}")
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+
+# Phase 1: Dashboard Page
+@app.get("/dashboard/{user_id}", response_class=HTMLResponse)
+async def dashboard_page(request: Request, user_id: int):
+    """User dashboard with statistics and quick access"""
+    from src.user_manager import get_user_stats
+    from src.db import get_database, get_user_videos
+    
+    try:
+        # Get user stats
+        sb = await get_database()
+        stats = await get_user_stats(sb, user_id)
+        
+        # Get recent videos
+        recent_videos = await get_user_videos(user_id, limit=5)
+        
+        # Format videos
+        formatted_videos = []
+        for video in recent_videos:
+            formatted_videos.append({
+                'short_id': video.get('short_id', video.get('file_id')),
+                'title': video.get('title', 'Unknown'),
+                'thumbnail': video.get('thumbnail', ''),
+                'duration': format_duration(video.get('duration', 0)),
+                'views': video.get('views', 0),
+                'date': format_date(video.get('created_at'))
+            })
+        
+        return templates.TemplateResponse("dashboard.html", {
+            "request": request,
+            "user_id": user_id,
+            "stats": stats,
+            "recent_videos": formatted_videos
+        })
+    except Exception as e:
+        logger.error(f"Dashboard error: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load dashboard"
+        })
+
+
+# Phase 1: Advanced Search Page
+@app.get("/search", response_class=HTMLResponse)
+async def search_page(
+    request: Request,
+    user_id: int,
+    q: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    duration: str = "all",
+    sort: str = "latest"
+):
+    """Advanced search page with filters"""
+    from src.db import search_videos
+    
+    try:
+        # Search videos with filters
+        results = await search_videos(
+            user_id=user_id,
+            query=q,
+            date_from=date_from,
+            date_to=date_to,
+            duration_filter=duration,
+            sort_by=sort,
+            limit=100
+        )
+        
+        formatted_results = []
+        for video in results:
+            formatted_results.append({
+                'short_id': video.get('short_id', video.get('file_id')),
+                'title': video.get('title', 'Unknown'),
+                'thumbnail': video.get('thumbnail', ''),
+                'duration_formatted': format_duration(video.get('duration', 0)),
+                'views': video.get('views', 0),
+                'date': format_date(video.get('created_at'))
+            })
+        
+        return templates.TemplateResponse("search.html", {
+            "request": request,
+            "user_id": user_id,
+            "query": q,
+            "results": formatted_results,
+            "total": len(formatted_results)
+        })
+    except Exception as e:
+        logger.error(f"Search error: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Search failed"
+        })
+
+
+# Phase 3: File Upload Feature
+@app.post("/api/upload-file")
+async def upload_file(
+    file: UploadFile = File(...),
+    user_id: int = Body(...)
+):
+    """Upload local video file"""
+    import shutil
+    
+    try:
+        # Save uploaded file
+        upload_dir = Path("uploads")
+        upload_dir.mkdir(exist_ok=True)
+        
+        file_path = upload_dir / file.filename
+        
+        with file_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Generate short link
+        from src.link_shortener import generate_short_id
+        short_id = generate_short_id()
+        
+        # Save metadata
+        from src.db import get_database
+        sb = await get_database()
+        
+        video_data = {
+            "file_id": str(file_path),
+            "title": file.filename,
+            "duration": 0,  # Extract with ffprobe if needed
+            "thumbnail": "",
+            "user_id": user_id
+        }
+        
+        result = await sb.table("videos").insert(video_data).execute()
+        
+        if result.data:
+            video_id = result.data[0]['id']
+            
+            # Create short link
+            await sb.table("shared_links").insert({
+                "short_id": short_id,
+                "file_id": str(file_path),
+                "video_id": video_id,
+                "user_id": user_id,
+                "views": 0
+            }).execute()
+        
+        return {
+            "success": True,
+            "short_id": short_id,
+            "filename": file.filename
+        }
+    except Exception as e:
+        logger.error(f"File upload error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+# Phase 3: Video Editing Features
+@app.get("/edit/{video_id}", response_class=HTMLResponse)
+async def edit_page(request: Request, video_id: int, user_id: int):
+    """Video editing page"""
+    from src.db import get_video_by_id
+    
+    try:
+        video = await get_video_by_id(video_id)
+        
+        if not video or video.get('user_id') != user_id:
+            return templates.TemplateResponse("error.html", {
+                "request": request,
+                "error_code": 403,
+                "error_message": "Access denied"
+            })
+        
+        return templates.TemplateResponse("edit.html", {
+            "request": request,
+            "video": video,
+            "user_id": user_id
+        })
+    except Exception as e:
+        logger.error(f"Edit page error: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load edit page"
+        })
+
+
+@app.put("/api/videos/{video_id}")
+async def update_video(
+    video_id: int,
+    title: str = Body(None),
+    description: str = Body(None),
+    tags: list = Body([]),
+    user_id: int = Body(...)
+):
+    """Update video metadata"""
+    from src.db import update_video_metadata
+    
+    try:
+        success = await update_video_metadata(
+            video_id=video_id,
+            user_id=user_id,
+            title=title,
+            description=description,
+            tags=tags
+        )
+        
+        return {"success": success}
+    except Exception as e:
+        logger.error(f"Update video error: {e}")
+        return {"success": False, "message": str(e)}

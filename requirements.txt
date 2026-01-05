@@ -10,3 +10,4 @@ httpx
 pytest-asyncio
 pytest-cov
 certifi
+python-multipart
