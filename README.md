@@ -217,12 +217,27 @@ CREATE INDEX idx_videos_url ON videos(url);
 
 3. Project Settings > API에서 URL과 anon key를 복사하여 `.env`에 입력합니다.
 
-### Bin Channel 설정 (Pro 기능)
+## 🔧 BIN_CHANNEL Setup (Required)
 
-1. Telegram에서 새 **비공개 채널**을 생성합니다.
-2. 봇을 채널의 **관리자(Admin)**로 추가합니다 (메시지 게시 권한 필요).
-3. 채널에 아무 메시지나 보내고 `run_get_id.bat`를 실행하여 채널 ID를 확인합니다.
-4. 채널 ID를 `.env` 파일의 `BIN_CHANNEL_ID`에 입력합니다.
+The bot uses a Telegram channel as free cloud storage for all videos.
+
+### Steps:
+1. Create a new **Private** Telegram channel
+2. Add your bot as an administrator to the channel
+3. Get the channel ID:
+   - Forward a message from the channel to @userinfobot
+   - Copy the channel ID (starts with -100)
+4. Add to `.env`:
+   ```env
+   BIN_CHANNEL_ID=-100xxxxxxxxxx
+   ```
+
+### Why BIN_CHANNEL?
+- ✅ Free unlimited storage
+- ✅ Fast CDN delivery
+- ✅ Automatic file management
+- ✅ No server disk space used
+- ✅ Works with web uploads and downloads
 
 ---
 
