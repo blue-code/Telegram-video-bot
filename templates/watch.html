@@ -3,21 +3,444 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TVB Player</title>
+    <title>{{ video_title }} - TVB Player</title>
     <style>
-        body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; color: white; font-family: sans-serif; }
-        video { width: 100%; max-width: 1024px; box-shadow: 0 0 20px rgba(0,0,0,0.5); border-radius: 8px; }
-        .container { text-align: center; width: 90%; }
-        h1 { margin-bottom: 20px; font-weight: 300; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .player-wrapper {
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .video-header {
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .video-title {
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 10px;
+        }
+
+        .video-meta {
+            display: flex;
+            gap: 20px;
+            font-size: 14px;
+            color: #aaa;
+            flex-wrap: wrap;
+        }
+
+        .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+        }
+
+        video {
+            width: 100%;
+            display: block;
+        }
+
+        .loading-spinner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            display: none;
+        }
+
+        .loading-spinner.active {
+            display: block;
+        }
+
+        @keyframes spin {
+            0% { transform: translate(-50%, -50%) rotate(0deg); }
+            100% { transform: translate(-50%, -50%) rotate(360deg); }
+        }
+
+        .controls-panel {
+            padding: 20px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .speed-control select {
+            padding: 10px;
+            border-radius: 8px;
+            border: none;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .speed-control select option {
+            background: #333;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: rgba(0, 0, 0, 0.9);
+            padding: 15px 25px;
+            border-radius: 8px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+            display: none;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .toast.active {
+            display: block;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .error-message {
+            padding: 20px;
+            background: rgba(220, 38, 38, 0.2);
+            border-left: 4px solid #dc2626;
+            margin: 20px;
+            border-radius: 8px;
+            display: none;
+        }
+
+        .error-message.active {
+            display: block;
+        }
+
+        .theater-mode {
+            max-width: 100% !important;
+        }
+
+        @media (max-width: 768px) {
+            .video-title {
+                font-size: 18px;
+            }
+
+            .controls-panel {
+                padding: 15px;
+            }
+
+            .btn {
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+
+            .toast {
+                bottom: 20px;
+                right: 20px;
+                left: 20px;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <h1>▶️ Telegram Video Player</h1>
-        <video controls autoplay name="media">
-            <source src="/stream/{{ file_id }}" type="video/mp4">
-            Your browser does not support the video tag.
-        </video>
+    <div class="container" id="container">
+        <div class="player-wrapper">
+            <div class="video-header">
+                <h1 class="video-title">{{ video_title }}</h1>
+                <div class="video-meta">
+                    <div class="meta-item">
+                        <span>⏱️</span>
+                        <span>{{ duration }}</span>
+                    </div>
+                    <div class="meta-item">
+                        <span>👁️</span>
+                        <span id="view-count">{{ view_count }}</span> views
+                    </div>
+                    <div class="meta-item">
+                        <span>📅</span>
+                        <span>{{ upload_date }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="video-container">
+                <video id="video-player" controls autoplay name="media">
+                    <source src="/stream/{{ file_id }}" type="video/mp4">
+                    Your browser does not support the video tag.
+                </video>
+                <div class="loading-spinner" id="loading-spinner"></div>
+            </div>
+
+            <div class="error-message" id="error-message">
+                <strong>Playback Error</strong>
+                <p>Could not load the video. Please try again.</p>
+                <button class="btn btn-primary" onclick="location.reload()">Retry</button>
+            </div>
+
+            <div class="controls-panel">
+                <button class="btn btn-primary" id="download-btn">
+                    <span>⬇️</span>
+                    <span>Download</span>
+                </button>
+                <button class="btn btn-secondary" id="share-btn">
+                    <span>🔗</span>
+                    <span>Share</span>
+                </button>
+                <button class="btn btn-secondary" id="pip-btn">
+                    <span>📺</span>
+                    <span>Picture-in-Picture</span>
+                </button>
+                <button class="btn btn-secondary" id="theater-btn">
+                    <span>🖥️</span>
+                    <span>Theater Mode</span>
+                </button>
+                <div class="speed-control">
+                    <label>Speed:</label>
+                    <select id="speed-select">
+                        <option value="0.5">0.5x</option>
+                        <option value="0.75">0.75x</option>
+                        <option value="1" selected>1x</option>
+                        <option value="1.25">1.25x</option>
+                        <option value="1.5">1.5x</option>
+                        <option value="2">2x</option>
+                    </select>
+                </div>
+            </div>
+        </div>
     </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const video = document.getElementById('video-player');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const errorMessage = document.getElementById('error-message');
+        const downloadBtn = document.getElementById('download-btn');
+        const shareBtn = document.getElementById('share-btn');
+        const pipBtn = document.getElementById('pip-btn');
+        const theaterBtn = document.getElementById('theater-btn');
+        const speedSelect = document.getElementById('speed-select');
+        const container = document.getElementById('container');
+        const toast = document.getElementById('toast');
+        const shortId = '{{ short_id }}';
+
+        // Increment view count on page load
+        fetch(`/api/increment-view/${shortId}`, { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    const viewCount = document.getElementById('view-count');
+                    viewCount.textContent = parseInt(viewCount.textContent) + 1;
+                }
+            })
+            .catch(err => console.error('View tracking error:', err));
+
+        // Show loading spinner
+        video.addEventListener('waiting', () => {
+            loadingSpinner.classList.add('active');
+        });
+
+        video.addEventListener('canplay', () => {
+            loadingSpinner.classList.remove('active');
+        });
+
+        // Handle errors
+        video.addEventListener('error', () => {
+            loadingSpinner.classList.remove('active');
+            errorMessage.classList.add('active');
+        });
+
+        // Download button
+        downloadBtn.addEventListener('click', () => {
+            const downloadUrl = `/download/${shortId}`;
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = '{{ video_title }}.mp4';
+            link.click();
+            showToast('Download started!');
+        });
+
+        // Share button
+        shareBtn.addEventListener('click', async () => {
+            const url = window.location.href;
+            
+            if (navigator.share) {
+                try {
+                    await navigator.share({
+                        title: '{{ video_title }}',
+                        url: url
+                    });
+                } catch (err) {
+                    if (err.name !== 'AbortError') {
+                        copyToClipboard(url);
+                    }
+                }
+            } else {
+                copyToClipboard(url);
+            }
+        });
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Link copied to clipboard!');
+            }).catch(() => {
+                showToast('Failed to copy link');
+            });
+        }
+
+        // Picture-in-Picture
+        pipBtn.addEventListener('click', async () => {
+            try {
+                if (document.pictureInPictureElement) {
+                    await document.exitPictureInPicture();
+                } else {
+                    await video.requestPictureInPicture();
+                    showToast('Picture-in-Picture enabled');
+                }
+            } catch (err) {
+                showToast('PiP not supported');
+            }
+        });
+
+        // Theater mode
+        let theaterMode = false;
+        theaterBtn.addEventListener('click', () => {
+            theaterMode = !theaterMode;
+            container.classList.toggle('theater-mode');
+            showToast(theaterMode ? 'Theater mode enabled' : 'Theater mode disabled');
+        });
+
+        // Playback speed
+        speedSelect.addEventListener('change', (e) => {
+            video.playbackRate = parseFloat(e.target.value);
+            showToast(`Speed set to ${e.target.value}x`);
+        });
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            // Prevent if typing in an input
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            switch(e.key) {
+                case ' ':
+                case 'k':
+                    e.preventDefault();
+                    if (video.paused) {
+                        video.play();
+                    } else {
+                        video.pause();
+                    }
+                    break;
+                case 'f':
+                    e.preventDefault();
+                    if (document.fullscreenElement) {
+                        document.exitFullscreen();
+                    } else {
+                        video.requestFullscreen();
+                    }
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    video.currentTime -= 5;
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    video.currentTime += 5;
+                    break;
+                case 'ArrowUp':
+                    e.preventDefault();
+                    video.volume = Math.min(1, video.volume + 0.1);
+                    showToast(`Volume: ${Math.round(video.volume * 100)}%`);
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    video.volume = Math.max(0, video.volume - 0.1);
+                    showToast(`Volume: ${Math.round(video.volume * 100)}%`);
+                    break;
+            }
+        });
+
+        function showToast(message) {
+            toast.textContent = message;
+            toast.classList.add('active');
+            setTimeout(() => {
+                toast.classList.remove('active');
+            }, 3000);
+        }
+    </script>
 </body>
 </html>

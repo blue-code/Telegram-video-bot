@@ -257,3 +257,55 @@ class QueueManager:
 
 # Global queue manager instance
 queue_manager = QueueManager()
+
+
+async def get_queue_status(user_id: int) -> Optional[Dict]:
+    """
+    Get queue status for a user.
+    
+    Args:
+        user_id: Telegram user ID
+        
+    Returns:
+        Dictionary with current download and queue items, or None
+    """
+    user_tasks = await queue_manager.get_user_queue(user_id)
+    
+    if not user_tasks:
+        return None
+    
+    # Find currently running task
+    running_task_id = queue_manager.running_tasks.get(user_id)
+    current_task = None
+    
+    if running_task_id:
+        current_task = await queue_manager.get_task(running_task_id)
+    
+    # Get queued tasks
+    queued_tasks = [
+        task for task in user_tasks
+        if task.status == TaskStatus.QUEUED
+    ]
+    
+    result = {}
+    
+    if current_task and current_task.status == TaskStatus.RUNNING:
+        result['current'] = {
+            'task_id': current_task.task_id,
+            'title': current_task.video_title,
+            'progress': current_task.progress,
+            'quality': current_task.quality
+        }
+    
+    if queued_tasks:
+        result['queue'] = [
+            {
+                'task_id': task.task_id,
+                'title': task.video_title,
+                'quality': task.quality
+            }
+            for task in queued_tasks
+        ]
+    
+    return result if result else None
+

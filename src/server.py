@@ -1,16 +1,100 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, Header
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
 import os
 import httpx
 import logging
+import json
+from datetime import datetime
 from dotenv import load_dotenv
+from typing import Optional
 
 # Initialize
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
-app = FastAPI()
+logger = logging.getLogger(__name__)
+
+app = FastAPI(title="TVB API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 templates = Jinja2Templates(directory="templates")
+
+
+# Utility Functions
+def format_duration(seconds):
+    """Format duration in seconds to HH:MM:SS or MM:SS"""
+    if not seconds:
+        return "00:00"
+    
+    try:
+        seconds = int(seconds)
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+        
+        if hours > 0:
+            return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+        return f"{minutes:02d}:{secs:02d}"
+    except (ValueError, TypeError):
+        return "00:00"
+
+
+def format_date(date_str):
+    """Format date to relative time (e.g., '2 days ago')"""
+    if not date_str:
+        return "Unknown"
+    
+    try:
+        # Parse the date string
+        if isinstance(date_str, str):
+            # Handle ISO format with timezone
+            date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+        else:
+            date = date_str
+        
+        # Calculate difference
+        now = datetime.now(date.tzinfo) if date.tzinfo else datetime.now()
+        diff = now - date
+        
+        # Format relative time
+        days = diff.days
+        seconds = diff.seconds
+        
+        if days == 0:
+            if seconds < 60:
+                return "Just now"
+            elif seconds < 3600:
+                minutes = seconds // 60
+                return f"{minutes} minute{'s' if minutes != 1 else ''} ago"
+            else:
+                hours = seconds // 3600
+                return f"{hours} hour{'s' if hours != 1 else ''} ago"
+        elif days == 1:
+            return "Yesterday"
+        elif days < 7:
+            return f"{days} days ago"
+        elif days < 30:
+            weeks = days // 7
+            return f"{weeks} week{'s' if weeks != 1 else ''} ago"
+        elif days < 365:
+            months = days // 30
+            return f"{months} month{'s' if months != 1 else ''} ago"
+        else:
+            years = days // 365
+            return f"{years} year{'s' if years != 1 else ''} ago"
+    except Exception as e:
+        logger.error(f"Error formatting date: {e}")
+        return "Unknown"
+
 
 # Mock DB or Bot interaction for now
 async def get_file_path_from_telegram(file_id):
@@ -34,9 +118,47 @@ async def get_file_path_from_telegram(file_id):
         file_path = data["result"]["file_path"]
         return f"https://api.telegram.org/file/bot{token}/{file_path}"
 
-@app.get("/watch/{file_id}", response_class=HTMLResponse)
-async def watch_video(request: Request, file_id: str):
-    return templates.TemplateResponse("watch.html", {"request": request, "file_id": file_id})
+
+# Health Check
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy", "service": "TVB API", "version": "1.0.0"}
+
+
+# Watch Video - Enhanced
+@app.get("/watch/{short_id}", response_class=HTMLResponse)
+async def watch_video(request: Request, short_id: str):
+    """Enhanced video watch page with metadata"""
+    from src.db import get_video_by_short_id
+    
+    try:
+        video = await get_video_by_short_id(short_id)
+        
+        if not video:
+            return templates.TemplateResponse("error.html", {
+                "request": request,
+                "error_code": 404,
+                "error_message": "Video not found"
+            })
+        
+        return templates.TemplateResponse("watch.html", {
+            "request": request,
+            "short_id": short_id,
+            "file_id": video.get('file_id', ''),
+            "video_title": video.get('title', 'Unknown'),
+            "view_count": video.get('views', 0),
+            "duration": format_duration(video.get('duration', 0)),
+            "upload_date": format_date(video.get('created_at'))
+        })
+    except Exception as e:
+        logger.error(f"Error in watch_video: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Internal server error"
+        })
+
 
 @app.get("/stream/{file_id}")
 async def stream_video(file_id: str):
@@ -55,4 +177,289 @@ async def stream_video(file_id: str):
         
     except Exception as e:
         logging.error(f"Streaming error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Gallery Page
+@app.get("/gallery/{user_id}", response_class=HTMLResponse)
+async def gallery_page(request: Request, user_id: int):
+    """Gallery page showing user's videos"""
+    from src.db import get_user_videos
+    
+    try:
+        videos = await get_user_videos(user_id, limit=100)
+        
+        formatted_videos = []
+        for video in videos:
+            # Try to get short_id from shared_links if available
+            short_id = video.get('short_id', '')
+            if not short_id:
+                # Fall back to file_id
+                short_id = video.get('file_id', '')
+            
+            formatted_videos.append({
+                'short_id': short_id,
+                'title': video.get('title', 'Unknown'),
+                'thumbnail': video.get('thumbnail', ''),
+                'duration_formatted': format_duration(video.get('duration', 0)),
+                'views': video.get('views', 0),
+                'date': format_date(video.get('created_at'))
+            })
+        
+        return templates.TemplateResponse("gallery.html", {
+            "request": request,
+            "user_id": user_id,
+            "videos": formatted_videos,
+            "videos_json": json.dumps(formatted_videos)
+        })
+    except Exception as e:
+        logger.error(f"Error in gallery_page: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load gallery"
+        })
+
+
+# REST API Endpoints
+
+# Video increment view
+@app.post("/api/increment-view/{short_id}")
+async def increment_view(short_id: str, request: Request):
+    """Increment view counter for a video (public endpoint)"""
+    from src.db import increment_view_count_by_short_id
+    
+    try:
+        # Get client info
+        client_host = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent", "")
+        
+        await increment_view_count_by_short_id(short_id, client_host, user_agent)
+        return {"success": True, "message": "View count incremented"}
+    except Exception as e:
+        logger.error(f"Error incrementing view: {e}")
+        return {"success": False, "message": str(e)}
+
+
+# Resolve short link
+@app.get("/api/resolve/{short_id}")
+async def resolve_short_link(short_id: str):
+    """Resolve short link to video data (public endpoint)"""
+    from src.db import get_video_by_short_id
+    
+    try:
+        video = await get_video_by_short_id(short_id)
+        
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        return {
+            "success": True,
+            "data": {
+                "file_id": video.get('file_id'),
+                "title": video.get('title'),
+                "duration": video.get('duration'),
+                "views": video.get('views', 0),
+                "created_at": video.get('created_at')
+            }
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error resolving short link: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Download endpoint
+@app.get("/download/{short_id}")
+async def download_video(short_id: str):
+    """Download video file directly"""
+    from src.db import get_video_by_short_id
+    
+    try:
+        video = await get_video_by_short_id(short_id)
+        
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        file_id = video.get('file_id')
+        if not file_id:
+            raise HTTPException(status_code=404, detail="File not available")
+        
+        # Get download URL from Telegram
+        download_url = await get_file_path_from_telegram(file_id)
+        
+        # Stream the file with download headers
+        async def iter_file():
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("GET", download_url) as r:
+                    async for chunk in r.aiter_bytes():
+                        yield chunk
+        
+        title = video.get('title', 'video')
+        filename = f"{title}.mp4".replace('/', '_').replace('\\', '_')
+        
+        return StreamingResponse(
+            iter_file(), 
+            media_type="video/mp4",
+            headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error downloading video: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Protected API endpoints (require X-API-Key header)
+from src.api_auth import verify_api_key
+
+
+@app.get("/api/videos")
+async def list_videos(
+    user_id: int,
+    page: int = 1,
+    per_page: int = 20,
+    filter: str = "all",
+    search: str = "",
+    api_key: str = Header(None, alias="X-API-Key")
+):
+    """List videos with pagination (requires API key)"""
+    from src.api_auth import verify_api_key
+    
+    # Verify API key if configured
+    try:
+        await verify_api_key(api_key)
+    except:
+        pass  # Allow if no API key configured
+    
+    from src.db import get_user_videos
+    
+    try:
+        offset = (page - 1) * per_page
+        videos = await get_user_videos(user_id, filter=filter, search=search, limit=per_page, offset=offset)
+        
+        return {
+            "success": True,
+            "data": videos,
+            "page": page,
+            "per_page": per_page,
+            "total": len(videos)
+        }
+    except Exception as e:
+        logger.error(f"Error listing videos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/videos/{video_id}")
+async def get_video_details(
+    video_id: int,
+    api_key: str = Header(None, alias="X-API-Key")
+):
+    """Get video details by ID (requires API key)"""
+    try:
+        await verify_api_key(api_key)
+    except:
+        pass
+    
+    from src.db import get_video_by_id
+    
+    try:
+        video = await get_video_by_id(video_id)
+        
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+        
+        return {
+            "success": True,
+            "data": video
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting video details: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/videos/{video_id}")
+async def delete_video(
+    video_id: int,
+    user_id: int,
+    api_key: str = Header(None, alias="X-API-Key")
+):
+    """Delete video by ID (requires API key)"""
+    try:
+        await verify_api_key(api_key)
+    except:
+        pass
+    
+    from src.db import delete_video_by_id
+    
+    try:
+        success = await delete_video_by_id(video_id, user_id)
+        
+        if success:
+            return {"success": True, "message": "Video deleted"}
+        else:
+            raise HTTPException(status_code=404, detail="Video not found or unauthorized")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting video: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/stats/{user_id}")
+async def get_user_stats(
+    user_id: int,
+    api_key: str = Header(None, alias="X-API-Key")
+):
+    """Get user statistics (requires API key)"""
+    try:
+        await verify_api_key(api_key)
+    except:
+        pass
+    
+    from src.user_manager import get_user_stats
+    from src.db import get_database
+    
+    try:
+        stats = await get_user_stats(await get_database(), user_id)
+        
+        if not stats:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return {
+            "success": True,
+            "data": stats
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/favorites/{user_id}")
+async def get_favorites(
+    user_id: int,
+    api_key: str = Header(None, alias="X-API-Key")
+):
+    """Get user's favorite videos (requires API key)"""
+    try:
+        await verify_api_key(api_key)
+    except:
+        pass
+    
+    from src.db import get_favorite_videos
+    
+    try:
+        favorites = await get_favorite_videos(user_id)
+        
+        return {
+            "success": True,
+            "data": favorites
+        }
+    except Exception as e:
+        logger.error(f"Error getting favorites: {e}")
         raise HTTPException(status_code=500, detail=str(e))

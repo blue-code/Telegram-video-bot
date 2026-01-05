@@ -1037,6 +1037,72 @@ async def grant_premium_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.effective_message.reply_text("오류가 발생했습니다. 😭")
 
 
+async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /queue command to show download queue status."""
+    user_id = update.effective_user.id
+    
+    try:
+        # Get queue status from queue_manager
+        from src.queue_manager import get_queue_status
+        
+        queue_status = await get_queue_status(user_id)
+        
+        if not queue_status:
+            await update.effective_message.reply_text(
+                "📋 **다운로드 큐**\n\n"
+                "현재 대기 중인 다운로드가 없습니다.\n"
+                "영상 URL을 보내서 다운로드를 시작하세요!",
+                parse_mode='Markdown'
+            )
+            return
+        
+        current_download = queue_status.get('current')
+        queued_items = queue_status.get('queue', [])
+        
+        message = "📋 **다운로드 큐 상태**\n\n"
+        
+        if current_download:
+            progress = current_download.get('progress', 0)
+            title = current_download.get('title', 'Unknown')
+            message += f"**⬇️ 현재 다운로드 중:**\n"
+            message += f"📹 {title[:40]}\n"
+            message += f"진행률: {progress}%\n\n"
+        
+        if queued_items:
+            message += f"**⏳ 대기 중 ({len(queued_items)}개):**\n"
+            for i, item in enumerate(queued_items[:5]):
+                title = item.get('title', 'Unknown')
+                message += f"{i+1}. {title[:40]}\n"
+            
+            if len(queued_items) > 5:
+                message += f"\n... 외 {len(queued_items) - 5}개\n"
+        
+        # Add control buttons
+        buttons = []
+        if current_download:
+            buttons.append([
+                InlineKeyboardButton("⏸ 일시정지", callback_data="queue_pause"),
+                InlineKeyboardButton("❌ 취소", callback_data="queue_cancel")
+            ])
+        
+        reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
+        
+        await update.effective_message.reply_text(
+            message,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logging.error(f"Error in queue_command: {e}")
+        await update.effective_message.reply_text(
+            "📋 **다운로드 큐**\n\n"
+            "큐 상태를 확인할 수 없습니다.\n"
+            "현재 구현 중인 기능입니다.",
+            parse_mode='Markdown'
+        )
+
+
 def main():
     """Start the bot."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -1065,6 +1131,9 @@ def main():
     
     # Admin commands
     application.add_handler(CommandHandler("grant_premium", grant_premium_command))
+    
+    # Queue management commands
+    application.add_handler(CommandHandler("queue", queue_command))
     
     # Message and callback handlers
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))

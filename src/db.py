@@ -46,12 +46,14 @@ async def get_video_by_file_id(file_id: str):
     return result.data[0] if result.data else None
 
 
-async def get_user_videos(user_id: int, limit: int = 10, offset: int = 0):
+async def get_user_videos(user_id: int, filter: str = "all", search: str = "", limit: int = 20, offset: int = 0):
     """
-    Get videos for a specific user with pagination.
+    Get videos for a specific user with filtering and search.
     
     Args:
         user_id: Telegram user ID
+        filter: Filter type ('all', 'favorites', 'recent')
+        search: Search keyword for title
         limit: Number of videos to return
         offset: Offset for pagination
         
@@ -59,7 +61,34 @@ async def get_user_videos(user_id: int, limit: int = 10, offset: int = 0):
         List of video metadata
     """
     sb = await get_database()
-    result = await sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+    
+    if filter == "favorites":
+        # Get favorite videos
+        result = await sb.table("favorites").select("video_id, videos(*)").eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+        
+        if result.data:
+            videos = [item.get("videos") for item in result.data if item.get("videos")]
+            
+            # Apply search filter if provided
+            if search:
+                videos = [v for v in videos if search.lower() in v.get('title', '').lower()]
+            
+            return videos
+        return []
+    
+    # Regular video query
+    query = sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id)
+    
+    # Apply search filter
+    if search:
+        query = query.ilike("title", f"%{search}%")
+    
+    # Apply sorting
+    query = query.order("created_at", desc=True)
+    
+    # Apply pagination
+    result = await query.range(offset, offset + limit - 1).execute()
+    
     return result.data if result.data else []
 
 
@@ -249,17 +278,24 @@ async def get_popular_videos(limit: int = 10):
     return result.data if result.data else []
 
 
-async def get_video_count(user_id: int = None):
+async def get_video_count(user_id: int = None, filter: str = "all"):
     """
     Get total video count for a user or all users.
     
     Args:
         user_id: Telegram user ID (optional)
+        filter: Filter type ('all', 'favorites', 'recent')
         
     Returns:
         Video count
     """
     sb = await get_database()
+    
+    if filter == "favorites" and user_id:
+        # Count favorites
+        result = await sb.table("favorites").select("id", count="exact").eq("user_id", user_id).execute()
+        return result.count if hasattr(result, 'count') else 0
+    
     query = sb.table(VIDEO_TABLE).select("id", count="exact")
     
     if user_id:
@@ -267,3 +303,140 @@ async def get_video_count(user_id: int = None):
     
     result = await query.execute()
     return result.count if hasattr(result, 'count') else 0
+
+
+async def get_video_by_short_id(short_id: str):
+    """
+    Get video info by short_id from shared_links table.
+    
+    Args:
+        short_id: Short ID from shared link
+        
+    Returns:
+        Video data with views count or None
+    """
+    try:
+        sb = await get_database()
+        
+        # Get shared link data
+        link_result = await sb.table("shared_links").select("*").eq("short_id", short_id).execute()
+        
+        if not link_result.data:
+            return None
+        
+        link_data = link_result.data[0]
+        video_id = link_data.get("video_id")
+        file_id = link_data.get("file_id")
+        
+        # Get video metadata if video_id exists
+        video_data = None
+        if video_id:
+            video_result = await sb.table(VIDEO_TABLE).select("*").eq("id", video_id).execute()
+            if video_result.data:
+                video_data = video_result.data[0]
+        
+        # If no video metadata, try to get by file_id
+        if not video_data and file_id:
+            video_result = await sb.table(VIDEO_TABLE).select("*").eq("file_id", file_id).execute()
+            if video_result.data:
+                video_data = video_result.data[0]
+        
+        # Combine link data with video data
+        if video_data:
+            video_data['views'] = link_data.get('views', 0)
+            video_data['short_id'] = short_id
+            return video_data
+        
+        # Return just link data if no video metadata found
+        return {
+            'file_id': file_id,
+            'short_id': short_id,
+            'views': link_data.get('views', 0),
+            'title': 'Unknown',
+            'duration': 0,
+            'created_at': link_data.get('created_at')
+        }
+        
+    except Exception as e:
+        import logging
+        logging.error(f"Error getting video by short_id: {e}")
+        return None
+
+
+async def increment_view_count_by_short_id(short_id: str, ip_address: str = None, user_agent: str = None):
+    """
+    Increment view count for a video by short_id.
+    
+    Args:
+        short_id: Short ID from shared link
+        ip_address: Optional IP address of viewer
+        user_agent: Optional user agent string
+    """
+    try:
+        sb = await get_database()
+        
+        # Get current views from shared_links
+        result = await sb.table("shared_links").select("views, video_id").eq("short_id", short_id).execute()
+        
+        if result.data:
+            current_views = result.data[0].get("views", 0) or 0
+            video_id = result.data[0].get("video_id")
+            
+            # Update views in shared_links
+            await sb.table("shared_links").update({
+                "views": current_views + 1
+            }).eq("short_id", short_id).execute()
+            
+            # Also update video table if video_id exists
+            if video_id:
+                video_result = await sb.table(VIDEO_TABLE).select("views").eq("id", video_id).execute()
+                if video_result.data:
+                    video_views = video_result.data[0].get("views", 0) or 0
+                    await sb.table(VIDEO_TABLE).update({
+                        "views": video_views + 1,
+                        "last_viewed": "now()"
+                    }).eq("id", video_id).execute()
+            
+            # Insert into views table for analytics (if it exists)
+            try:
+                await sb.table("views").insert({
+                    "short_id": short_id,
+                    "user_id": None,  # Web viewer, not Telegram user
+                    "ip_address": ip_address,
+                    "user_agent": user_agent
+                }).execute()
+            except Exception:
+                pass  # views table might not exist yet
+                
+    except Exception as e:
+        import logging
+        logging.error(f"Error incrementing view count: {e}")
+
+
+async def delete_video_by_id(video_id: int, user_id: int):
+    """
+    Delete a video by ID (only if it belongs to the user).
+    Alias for delete_video for consistency.
+    
+    Args:
+        video_id: Video ID
+        user_id: Telegram user ID
+        
+    Returns:
+        True if deleted, False otherwise
+    """
+    return await delete_video(video_id, user_id)
+
+
+async def get_favorite_videos(user_id: int):
+    """
+    Get user's favorite videos.
+    Alias for get_user_favorites for consistency.
+    
+    Args:
+        user_id: Telegram user ID
+        
+    Returns:
+        List of favorite video metadata
+    """
+    return await get_user_favorites(user_id, limit=100, offset=0)
