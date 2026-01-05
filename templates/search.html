@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Search Videos - TVB</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 280px 1fr;
+            gap: 20px;
+        }
+
+        .header {
+            grid-column: 1 / -1;
+            margin-bottom: 10px;
+        }
+
+        .header h1 {
+            font-size: 32px;
+            font-weight: 700;
+            margin-bottom: 20px;
+        }
+
+        .search-bar {
+            position: relative;
+            grid-column: 1 / -1;
+            margin-bottom: 20px;
+        }
+
+        .search-bar input {
+            width: 100%;
+            padding: 16px 50px 16px 20px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            color: #fff;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+
+        .search-bar input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: rgba(0, 0, 0, 0.8);
+        }
+
+        .search-bar input::placeholder {
+            color: rgba(255, 255, 255, 0.4);
+        }
+
+        .search-bar button {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            color: #fff;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .search-bar button:hover {
+            transform: translateY(-50%) scale(1.05);
+        }
+
+        .sidebar {
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            height: fit-content;
+        }
+
+        .sidebar h3 {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 16px;
+        }
+
+        .filter-group {
+            margin-bottom: 24px;
+        }
+
+        .filter-group label {
+            display: block;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: rgba(255, 255, 255, 0.9);
+        }
+
+        .filter-group select,
+        .filter-group input {
+            width: 100%;
+            padding: 10px 12px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.3);
+            color: #fff;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .filter-group select:focus,
+        .filter-group input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .filter-group select option {
+            background: #333;
+        }
+
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .radio-group label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            font-weight: 400;
+            cursor: pointer;
+        }
+
+        .radio-group input[type="radio"] {
+            width: auto;
+        }
+
+        .filter-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 10px 16px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            flex: 1;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .main-content {
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(10px);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+
+        .results-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .results-header h2 {
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .results-count {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .video-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 16px;
+        }
+
+        .video-card {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer;
+            text-decoration: none;
+            color: inherit;
+            display: block;
+        }
+
+        .video-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .video-card .thumbnail {
+            width: 100%;
+            aspect-ratio: 16/9;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.3), rgba(118, 75, 162, 0.3));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            position: relative;
+        }
+
+        .video-card .thumbnail img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .video-card .duration {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .video-card .info {
+            padding: 12px;
+        }
+
+        .video-card .title {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .video-card .meta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .empty-state .icon {
+            font-size: 64px;
+            margin-bottom: 16px;
+        }
+
+        .empty-state h3 {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        @media (max-width: 968px) {
+            .container {
+                grid-template-columns: 1fr;
+            }
+
+            .sidebar {
+                order: 2;
+            }
+
+            .main-content {
+                order: 1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .video-grid {
+                grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Search Videos</h1>
+        </div>
+
+        <div class="search-bar">
+            <form id="search-form">
+                <input 
+                    type="text" 
+                    id="search-input" 
+                    name="q" 
+                    placeholder="Search by title..." 
+                    value="{{ query }}"
+                    autofocus
+                >
+                <button type="submit">Search</button>
+            </form>
+        </div>
+
+        <div class="sidebar">
+            <h3>🎛️ Filters</h3>
+            
+            <form id="filter-form">
+                <input type="hidden" name="user_id" value="{{ user_id }}">
+                <input type="hidden" name="q" id="filter-query" value="{{ query }}">
+
+                <div class="filter-group">
+                    <label>Date Range</label>
+                    <input type="date" name="date_from" id="date-from" placeholder="From">
+                    <input type="date" name="date_to" id="date-to" placeholder="To" style="margin-top: 8px;">
+                </div>
+
+                <div class="filter-group">
+                    <label>Duration</label>
+                    <div class="radio-group">
+                        <label>
+                            <input type="radio" name="duration" value="all" checked>
+                            All durations
+                        </label>
+                        <label>
+                            <input type="radio" name="duration" value="short">
+                            Short (&lt; 5 min)
+                        </label>
+                        <label>
+                            <input type="radio" name="duration" value="medium">
+                            Medium (5-20 min)
+                        </label>
+                        <label>
+                            <input type="radio" name="duration" value="long">
+                            Long (&gt; 20 min)
+                        </label>
+                    </div>
+                </div>
+
+                <div class="filter-group">
+                    <label>Sort By</label>
+                    <select name="sort" id="sort">
+                        <option value="latest">Latest First</option>
+                        <option value="views">Most Viewed</option>
+                        <option value="title">Title (A-Z)</option>
+                        <option value="duration">Duration</option>
+                    </select>
+                </div>
+
+                <div class="filter-actions">
+                    <button type="submit" class="btn btn-primary">Apply</button>
+                    <button type="button" class="btn btn-secondary" id="clear-btn">Clear</button>
+                </div>
+            </form>
+        </div>
+
+        <div class="main-content">
+            <div class="results-header">
+                <h2>Results</h2>
+                <span class="results-count">{{ total }} video{{ 's' if total != 1 else '' }} found</span>
+            </div>
+
+            {% if results and results|length > 0 %}
+            <div class="video-grid">
+                {% for video in results %}
+                <a href="/watch/{{ video.short_id }}" class="video-card">
+                    <div class="thumbnail">
+                        {% if video.thumbnail %}
+                        <img src="{{ video.thumbnail }}" alt="{{ video.title }}">
+                        {% else %}
+                        🎬
+                        {% endif %}
+                        {% if video.duration_formatted %}
+                        <div class="duration">{{ video.duration_formatted }}</div>
+                        {% endif %}
+                    </div>
+                    <div class="info">
+                        <div class="title">{{ video.title }}</div>
+                        <div class="meta">
+                            <span>👁️ {{ video.views }}</span>
+                            <span>📅 {{ video.date }}</span>
+                        </div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="empty-state">
+                <div class="icon">🔍</div>
+                <h3>No videos found</h3>
+                <p>Try adjusting your search or filters</p>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/service-worker.js');
+        }
+
+        const searchForm = document.getElementById('search-form');
+        const searchInput = document.getElementById('search-input');
+        const filterForm = document.getElementById('filter-form');
+        const filterQuery = document.getElementById('filter-query');
+        const clearBtn = document.getElementById('clear-btn');
+
+        // Sync search query between forms
+        searchForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            filterQuery.value = searchInput.value;
+            filterForm.submit();
+        });
+
+        // Apply filters
+        filterForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const formData = new FormData(filterForm);
+            const params = new URLSearchParams(formData);
+            window.location.href = `/search?${params.toString()}`;
+        });
+
+        // Clear filters
+        clearBtn.addEventListener('click', () => {
+            const userId = document.querySelector('input[name="user_id"]').value;
+            window.location.href = `/search?user_id=${userId}`;
+        });
+
+        // Load filter values from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.has('date_from')) {
+            document.getElementById('date-from').value = urlParams.get('date_from');
+        }
+        if (urlParams.has('date_to')) {
+            document.getElementById('date-to').value = urlParams.get('date_to');
+        }
+        if (urlParams.has('duration')) {
+            const duration = urlParams.get('duration');
+            document.querySelector(`input[name="duration"][value="${duration}"]`).checked = true;
+        }
+        if (urlParams.has('sort')) {
+            document.getElementById('sort').value = urlParams.get('sort');
+        }
+    </script>
+</body>
+</html>
