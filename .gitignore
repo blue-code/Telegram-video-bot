@@ -1,4 +1,29 @@
+# Environment and secrets
 .env
+.env.*
+
+# Python
 __pycache__/
-.pytest_cache/
 *.pyc
+*.pyo
+.pytest_cache/
+
+# Virtual environments
+venv/
+venv_win/
+.venv/
+
+# Downloads and temp files
+downloads/
+*.tmp
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# Utility scripts (not needed in repo)
+fix_env.py
+add_env.py
+get_channel_id.py
+verify_channel_post.py
