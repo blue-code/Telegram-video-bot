@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Header, Body, File, UploadFile
+from fastapi import FastAPI, HTTPException, Request, Header, Body, File, UploadFile, Form
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +7,8 @@ import os
 import httpx
 import logging
 import json
+import tempfile
+import shutil
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import Optional
@@ -484,36 +486,109 @@ async def web_download(
     quality: str = Body("best"),
     user_id: int = Body(...)
 ):
-    """Handle web-based video download"""
-    from src.downloader import extract_video_info
-    from src.link_shortener import generate_short_id
-    from src.db import get_database
+    """Handle web-based video download - uploads to Telegram"""
+    downloaded_file = None
+    temp_dir = None
     
     try:
-        # Extract video info (not downloading yet, just metadata)
-        info = await extract_video_info(url)
+        logger.info(f"Starting web download: {url}")
         
-        if info.get('is_playlist'):
-            return {
-                "success": False,
-                "message": "Playlist downloads not supported via web interface"
-            }
+        # Download video using yt-dlp to temporary directory
+        import yt_dlp
+        
+        temp_dir = tempfile.mkdtemp()
+        output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
+        
+        ydl_opts = {
+            'format': f'bestvideo[height<={quality}]+bestaudio/best' if quality != 'audio' else 'bestaudio',
+            'outtmpl': output_template,
+            'quiet': False,
+            'no_warnings': False,
+        }
+        
+        if quality == 'audio':
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+            }]
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            title = info.get('title', 'video')
+            downloaded_file = ydl.prepare_filename(info)
+            
+            # Handle audio conversion
+            if quality == 'audio':
+                downloaded_file = str(Path(downloaded_file).with_suffix('.mp3'))
+        
+        logger.info(f"Downloaded to: {downloaded_file}")
+        
+        # Get Telegram credentials
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+        
+        if not bot_token or not bin_channel_id:
+            raise Exception("Telegram credentials not configured")
+        
+        # Upload to Telegram
+        from telegram import Bot
+        from telegram.constants import ParseMode
+        
+        bot = Bot(token=bot_token)
+        
+        logger.info(f"Uploading {title} to Telegram...")
+        
+        with open(downloaded_file, 'rb') as video_file:
+            if quality == 'audio':
+                message = await bot.send_audio(
+                    chat_id=bin_channel_id,
+                    audio=video_file,
+                    caption=f"🌐 <b>Web Download</b>\n🎵 {title}\n🔗 {url[:100]}...",
+                    parse_mode=ParseMode.HTML,
+                    read_timeout=300,
+                    write_timeout=300
+                )
+                file_id = message.audio.file_id
+                duration = message.audio.duration or 0
+                thumbnail = message.audio.thumbnail.file_id if message.audio.thumbnail else ""
+            else:
+                message = await bot.send_video(
+                    chat_id=bin_channel_id,
+                    video=video_file,
+                    caption=f"🌐 <b>Web Download</b>\n🎬 {title}\n🔗 {url[:100]}...",
+                    parse_mode=ParseMode.HTML,
+                    supports_streaming=True,
+                    read_timeout=300,
+                    write_timeout=300
+                )
+                file_id = message.video.file_id
+                duration = message.video.duration or 0
+                thumbnail = message.video.thumbnail.file_id if message.video.thumbnail else ""
+        
+        logger.info(f"Upload successful! file_id: {file_id}")
+        
+        # Delete downloaded file and temp directory
+        if downloaded_file and os.path.exists(downloaded_file):
+            os.unlink(downloaded_file)
+        if temp_dir and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
+        logger.info("Cleaned up temporary files")
         
         # Generate short link
+        from src.link_shortener import generate_short_id
         short_id = generate_short_id()
         
-        # Save to database
+        # Save metadata to database
+        from src.db import get_database
         sb = await get_database()
         
-        # Insert video metadata
         video_data = {
-            "file_id": f"web_{short_id}",  # Temporary file_id for web downloads
-            "title": info.get('title', 'Unknown'),
-            "duration": info.get('duration', 0),
-            "thumbnail": info.get('thumbnail', ''),
-            "url": url,
+            "file_id": file_id,
+            "title": title,
+            "duration": duration,
+            "thumbnail": thumbnail,
             "user_id": user_id,
-            "quality": quality
+            "url": url  # Save original URL
         }
         
         result = await sb.table("videos").insert(video_data).execute()
@@ -524,23 +599,39 @@ async def web_download(
             # Create short link
             await sb.table("shared_links").insert({
                 "short_id": short_id,
-                "file_id": video_data['file_id'],
+                "file_id": file_id,
                 "video_id": video_id,
                 "user_id": user_id,
                 "views": 0
             }).execute()
         
+        logger.info(f"Video metadata saved: video_id={video_id}, short_id={short_id}")
+        
         return {
             "success": True,
             "short_id": short_id,
-            "title": info.get('title', 'Unknown'),
-            "message": "Download complete!"
+            "title": title,
+            "message": "✅ Download and upload complete!"
         }
+        
     except Exception as e:
         logger.error(f"Web download error: {e}")
+        
+        # Cleanup on error
+        if downloaded_file and os.path.exists(downloaded_file):
+            try:
+                os.unlink(downloaded_file)
+            except:
+                pass
+        if temp_dir and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
+        
         return {
             "success": False,
-            "message": str(e)
+            "message": f"Download failed: {str(e)}"
         }
 
 
@@ -643,35 +734,75 @@ async def search_page(
 @app.post("/api/upload-file")
 async def upload_file(
     file: UploadFile = File(...),
-    user_id: int = Body(...)
+    user_id: int = Form(...)
 ):
-    """Upload local video file"""
-    import shutil
+    """Upload local video file to Telegram (not local storage)"""
+    tmp_path = None
     
     try:
-        # Save uploaded file
-        upload_dir = Path("uploads")
-        upload_dir.mkdir(exist_ok=True)
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
+            shutil.copyfileobj(file.file, tmp_file)
+            tmp_path = tmp_file.name
         
-        file_path = upload_dir / file.filename
+        logger.info(f"Temporary file saved: {tmp_path}")
         
-        with file_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+        # Get Telegram credentials
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+        
+        if not bot_token:
+            raise Exception("TELEGRAM_BOT_TOKEN not configured in .env")
+        if not bin_channel_id:
+            raise Exception("BIN_CHANNEL_ID not configured in .env")
+        
+        # Upload to Telegram
+        from telegram import Bot
+        from telegram.constants import ParseMode
+        
+        bot = Bot(token=bot_token)
+        
+        logger.info(f"Uploading {file.filename} to Telegram BIN_CHANNEL...")
+        
+        with open(tmp_path, 'rb') as video_file:
+            message = await bot.send_video(
+                chat_id=bin_channel_id,
+                video=video_file,
+                caption=f"📤 <b>Web Upload</b>\n📁 {file.filename}\n👤 User: {user_id}",
+                parse_mode=ParseMode.HTML,
+                supports_streaming=True,
+                read_timeout=300,
+                write_timeout=300,
+                connect_timeout=60
+            )
+        
+        logger.info(f"Upload successful! file_id: {message.video.file_id}")
+        
+        # Delete temporary file immediately
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+            logger.info(f"Temporary file deleted: {tmp_path}")
+        
+        # Get video metadata from Telegram
+        file_id = message.video.file_id
+        duration = message.video.duration or 0
+        thumbnail = message.video.thumbnail.file_id if message.video.thumbnail else ""
         
         # Generate short link
         from src.link_shortener import generate_short_id
         short_id = generate_short_id()
         
-        # Save metadata
+        # Save metadata to database
         from src.db import get_database
         sb = await get_database()
         
         video_data = {
-            "file_id": str(file_path),
+            "file_id": file_id,
             "title": file.filename,
-            "duration": 0,  # Extract with ffprobe if needed
-            "thumbnail": "",
-            "user_id": user_id
+            "duration": duration,
+            "thumbnail": thumbnail,
+            "user_id": user_id,
+            "url": None  # No URL for local uploads
         }
         
         result = await sb.table("videos").insert(video_data).execute()
@@ -682,20 +813,37 @@ async def upload_file(
             # Create short link
             await sb.table("shared_links").insert({
                 "short_id": short_id,
-                "file_id": str(file_path),
+                "file_id": file_id,
                 "video_id": video_id,
                 "user_id": user_id,
                 "views": 0
             }).execute()
         
+        logger.info(f"Video metadata saved: video_id={video_id}, short_id={short_id}")
+        
         return {
             "success": True,
             "short_id": short_id,
-            "filename": file.filename
+            "filename": file.filename,
+            "file_id": file_id,
+            "message": "✅ Uploaded to Telegram successfully!"
         }
+        
     except Exception as e:
         logger.error(f"File upload error: {e}")
-        return {"success": False, "message": str(e)}
+        
+        # Cleanup temporary file on error
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+                logger.info(f"Cleaned up temporary file after error: {tmp_path}")
+            except Exception as cleanup_error:
+                logger.error(f"Failed to cleanup temp file: {cleanup_error}")
+        
+        return {
+            "success": False,
+            "message": str(e)
+        }
 
 
 # Phase 3: Video Editing Features
