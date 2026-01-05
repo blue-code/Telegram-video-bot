@@ -9,8 +9,15 @@ from telegram.request import HTTPXRequest
 from dotenv import load_dotenv
 
 from src.downloader import extract_video_info, download_video
-from src.db import get_video_by_url, save_video_metadata
+from src.db import (
+    get_video_by_url, save_video_metadata, get_database,
+    get_user_videos, search_user_videos, get_recent_videos,
+    add_favorite, remove_favorite, is_favorite, get_user_favorites,
+    get_popular_videos, increment_view_count, get_video_by_id
+)
 from src.splitter import split_video
+from src.user_manager import get_or_create_user, check_quota, increment_download_count, set_user_tier, get_user_stats
+from src.link_shortener import get_or_create_short_link
 
 load_dotenv()
 
@@ -23,6 +30,10 @@ logging.basicConfig(
 # Telegram Bot API limit for regular bots is 50MB.
 # We set it to 30MB to accommodate VBR spikes and keyframe alignment issues.
 MAX_FILE_SIZE = 30 * 1024 * 1024 # 30MB (Safety buffer for 50MB limit)
+
+# Get BASE_URL from environment
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 
 def get_progress_bar(percentage):
     """Generates a simple text progress bar."""
@@ -44,11 +55,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for the /help command."""
     help_text = (
         "도움이 필요하신가요? 걱정 마세요! 🙌\n\n"
-        "**사용 방법:**\n"
-        "1. 유튜브나 다른 영상 사이트의 URL을 저에게 보내주세요.\n"
-        "2. 제가 분석한 후에 화질을 선택하실 수 있는 메뉴를 보여드릴게요.\n"
-        "3. 화질을 선택하면 다운로드와 전송이 시작됩니다! ⬇️\n\n"
-        "**명령어 리스트:**\n"
+        "**다운로드 명령어:**\n"
+        "영상 URL을 보내주세요 - 유튜브/영상 다운로드\n\n"
+        "**라이브러리 관리:**\n"
+        "/library 또는 /list - 내 영상 목록 보기\n"
+        "/search <키워드> - 영상 검색\n"
+        "/recent - 최근 다운로드한 영상 (5개)\n"
+        "/favorites - 즐겨찾기 목록\n\n"
+        "**정보 & 통계:**\n"
+        "/stats - 내 통계 보기\n"
+        "/quota - 남은 다운로드 횟수\n"
+        "/popular - 인기 영상 TOP 10\n\n"
+        "**기본 명령어:**\n"
         "/start - 봇 시작하기\n"
         "/help - 이 도움말 보기\n\n"
         "즐거운 시간 되세요! 🎸"
@@ -58,6 +76,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming text messages to detect URLs."""
     text = update.effective_message.text
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    
     # Improved regex to capture full URL including path and parameters
     url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+(?:/[-\w._?%&=#/]*)?'
     urls = re.findall(url_pattern, text)
@@ -67,6 +88,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = urls[0]
+    
+    # Check quota before processing
+    try:
+        has_quota, user = await check_quota(await get_database(), user_id, username)
+        if not has_quota:
+            remaining_time = "내일"  # You could calculate exact time here
+            await update.effective_message.reply_text(
+                f"⚠️ **다운로드 할당량 초과**\n\n"
+                f"오늘의 다운로드 할당량({user['daily_quota']}회)을 모두 사용했습니다.\n"
+                f"{remaining_time} 다시 시도해주세요!\n\n"
+                f"💡 /quota 명령어로 할당량을 확인할 수 있습니다."
+            )
+            return
+    except Exception as e:
+        logging.error(f"Error checking quota: {e}")
+        # Continue even if quota check fails
     
     # Check if already in DB
     existing_video = await get_video_by_url(url)
@@ -86,8 +123,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             caption=f"다시 보기: {existing_video.get('title', '오디오')}"
                         )
                     else:
+                        # Use BASE_URL instead of hardcoded localhost
+                        db_client = await get_database()
+                        short_id = await get_or_create_short_link(db_client, part['file_id'], existing_video.get('id'), user_id)
                         stream_markup = InlineKeyboardMarkup([[
-                            InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{part['file_id']}")
+                            InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"{BASE_URL}/watch/{short_id}")
                         ]])
                         await update.effective_message.reply_video(
                             video=part['file_id'],
@@ -100,9 +140,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n바로 보내드릴게요! (준비 중...)"
                 )
                 
-                # Create Streaming Button
+                # Create Streaming Button with short link
+                db_client = await get_database()
+                short_id = await get_or_create_short_link(db_client, existing_video['file_id'], existing_video.get('id'), user_id)
                 stream_markup = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{existing_video['file_id']}")
+                    InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"{BASE_URL}/watch/{short_id}")
                 ]])
                 
                 await update.effective_message.reply_video(
@@ -208,6 +250,72 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     data = query.data.split('|')
     
+    # Handle stream button
+    if data[0] == 'stream':
+        video_id = int(data[1])
+        try:
+            video = await get_video_by_id(video_id)
+            if video:
+                file_id = video.get('file_id')
+                # Get or create short link
+                db_client = await get_database()
+                short_id = await get_or_create_short_link(db_client, file_id, video_id, query.from_user.id)
+                stream_url = f"{BASE_URL}/watch/{short_id}"
+                
+                # Increment view count
+                await increment_view_count(video_id)
+                
+                await query.answer(f"스트리밍 링크: {stream_url}", show_alert=True)
+        except Exception as e:
+            logging.error(f"Error in stream callback: {e}")
+            await query.answer("스트리밍 링크 생성 실패", show_alert=True)
+        return
+    
+    # Handle favorite button
+    elif data[0] == 'fav':
+        video_id = int(data[1])
+        user_id = query.from_user.id
+        try:
+            success = await add_favorite(user_id, video_id)
+            if success:
+                await query.answer("⭐ 즐겨찾기에 추가되었습니다!", show_alert=False)
+            else:
+                await query.answer("이미 즐겨찾기에 추가되어 있습니다.", show_alert=False)
+        except Exception as e:
+            logging.error(f"Error in favorite callback: {e}")
+            await query.answer("즐겨찾기 추가 실패", show_alert=True)
+        return
+    
+    # Handle unfavorite button
+    elif data[0] == 'unfav':
+        video_id = int(data[1])
+        user_id = query.from_user.id
+        try:
+            success = await remove_favorite(user_id, video_id)
+            if success:
+                await query.answer("❌ 즐겨찾기에서 제거되었습니다!", show_alert=False)
+                # Refresh favorites list
+                await favorites_command(update, context)
+            else:
+                await query.answer("제거 실패", show_alert=True)
+        except Exception as e:
+            logging.error(f"Error in unfavorite callback: {e}")
+            await query.answer("제거 실패", show_alert=True)
+        return
+    
+    # Handle library pagination
+    elif data[0] == 'lib_prev':
+        current_page = int(data[1])
+        context.user_data['library_page'] = current_page - 1
+        await library_command(update, context)
+        return
+    
+    elif data[0] == 'lib_next':
+        current_page = int(data[1])
+        context.user_data['library_page'] = current_page + 1
+        await library_command(update, context)
+        return
+    
     # Handle Playlist - Download All
     if data[0] == 'pl_all':
         playlist_id = data[1]
@@ -266,6 +374,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             # Upload to Bin Channel first if configured
                             bin_channel_id = os.getenv("BIN_CHANNEL_ID")
                             file_to_send = video_file
+                            actual_file_id = None
                             
                             if bin_channel_id:
                                 try:
@@ -279,6 +388,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             read_timeout=600, write_timeout=600, connect_timeout=60
                                         )
                                         file_to_send = bin_msg.video.file_id
+                                        actual_file_id = bin_msg.video.file_id
                                     else:
                                         bin_msg = await context.bot.send_audio(
                                             chat_id=int(bin_channel_id),
@@ -287,23 +397,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                             read_timeout=600, write_timeout=600, connect_timeout=60
                                         )
                                         file_to_send = bin_msg.audio.file_id
+                                        actual_file_id = bin_msg.audio.file_id
                                 except Exception as e:
                                     logging.error(f"Bin channel upload failed: {e}")
                                     video_file.seek(0)
                             
                             # Send to user
-                            stream_markup = InlineKeyboardMarkup([[
-                                InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{file_to_send}")
-                            ]])
-                            
                             if part.lower().endswith('.mp4'):
-                                await context.bot.send_video(
+                                sent_msg = await context.bot.send_video(
                                     chat_id=query.message.chat_id,
                                     video=file_to_send,
                                     caption=f"[{i+1}/{total}] {entry['title']}",
-                                    supports_streaming=True,
-                                    reply_markup=stream_markup
+                                    supports_streaming=True
                                 )
+                                if not actual_file_id:
+                                    actual_file_id = sent_msg.video.file_id
+                                
+                                # Create short link and edit message to add streaming button
+                                try:
+                                    db_client = await get_database()
+                                    short_id = await get_or_create_short_link(db_client, actual_file_id, None, query.from_user.id)
+                                    stream_markup = InlineKeyboardMarkup([[
+                                        InlineKeyboardButton("🎬 스트리밍", url=f"{BASE_URL}/watch/{short_id}")
+                                    ]])
+                                    await sent_msg.edit_reply_markup(reply_markup=stream_markup)
+                                except Exception as e:
+                                    logging.error(f"Error creating short link: {e}")
                             else:
                                 await context.bot.send_audio(
                                     chat_id=query.message.chat_id,
@@ -365,6 +484,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         video_id = data[1]
         format_id = data[2]
         quality = data[3]
+        user_id = query.from_user.id
+        username = query.from_user.username
         
         video_meta = context.user_data.get(video_id)
         if not video_meta:
@@ -372,6 +493,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         url = video_meta['url']
+        
+        # Check quota before downloading
+        try:
+            has_quota, user = await check_quota(await get_database(), user_id, username)
+            if not has_quota:
+                await query.edit_message_text(
+                    f"⚠️ **다운로드 할당량 초과**\n\n"
+                    f"오늘의 다운로드 할당량을 모두 사용했습니다.\n"
+                    f"💡 /quota 명령어로 확인하세요."
+                )
+                return
+        except Exception as e:
+            logging.error(f"Error checking quota in callback: {e}")
+        
         status_message = await query.edit_message_text(
             f"선택하신 {quality} 화질로 작업을 시작합니다! 🚀\n"
             "먼저 영상을 다운로드할게요... 💪"
@@ -467,11 +602,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         video_file.seek(0)
 
                                 # 2. Send to User
-                                # Create Streaming Button
-                                stream_markup = InlineKeyboardMarkup([[
-                                    InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"http://localhost:8000/watch/{file_to_send}")
-                                ]])
-
                                 sent_msg = await context.bot.send_video(
                                     chat_id=query.message.chat_id,
                                     video=file_to_send,
@@ -479,10 +609,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     supports_streaming=True,
                                     read_timeout=600, 
                                     write_timeout=600, 
-                                    connect_timeout=60,
-                                    reply_markup=stream_markup
+                                    connect_timeout=60
                                 )
                                 file_id = bin_msg.video.file_id if bin_msg else sent_msg.video.file_id
+                                
+                                # Create short link and add streaming button
+                                try:
+                                    db_client = await get_database()
+                                    short_id = await get_or_create_short_link(db_client, file_id, None, user_id)
+                                    stream_markup = InlineKeyboardMarkup([[
+                                        InlineKeyboardButton("🎬 스트리밍", url=f"{BASE_URL}/watch/{short_id}")
+                                    ]])
+                                    await sent_msg.edit_reply_markup(reply_markup=stream_markup)
+                                except Exception as e:
+                                    logging.error(f"Error creating short link: {e}")
                             else:
                                 # Audio logic (similar pattern)
                                 bin_channel_id = os.getenv("BIN_CHANNEL_ID")
@@ -540,14 +680,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             "title": video_meta['title'],
                             "duration": video_meta['duration'],
                             "thumbnail": video_meta['thumbnail'],
+                            "user_id": user_id,  # Add user_id for multi-user support
                             "metadata": {
                                 "quality": quality, 
                                 "format_id": format_id,
                                 "parts": uploaded_file_ids
                             }
                         }
-                        await save_video_metadata(db_data)
+                        result = await save_video_metadata(db_data)
                         logging.info("Metadata saved to database with all parts.")
+                        
+                        # Increment download count
+                        try:
+                            await increment_download_count(await get_database(), user_id)
+                        except Exception as e:
+                            logging.error(f"Error incrementing download count: {e}")
 
             logging.info("All parts uploaded successfully.")
             await status_message.delete()
@@ -564,6 +711,332 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_message.edit_text(f"작업 중 오류가 발생했습니다... 😭\n사유: {str(e)}")
 
 
+async def library_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /library or /list command."""
+    user_id = update.effective_user.id
+    page = int(context.args[0]) if context.args and context.args[0].isdigit() else 0
+    
+    # Store page in user data for pagination
+    if 'library_page' not in context.user_data:
+        context.user_data['library_page'] = 0
+    
+    page = context.user_data.get('library_page', 0)
+    videos_per_page = 10
+    offset = page * videos_per_page
+    
+    try:
+        videos = await get_user_videos(user_id, limit=videos_per_page + 1, offset=offset)
+        
+        if not videos:
+            await update.effective_message.reply_text(
+                "아직 다운로드한 영상이 없어요! 🎬\n"
+                "영상 URL을 보내주시면 다운로드해드릴게요!"
+            )
+            return
+        
+        has_more = len(videos) > videos_per_page
+        videos = videos[:videos_per_page]
+        
+        # Build message
+        message = f"📚 **내 영상 라이브러리** (페이지 {page + 1})\n\n"
+        
+        buttons = []
+        for i, video in enumerate(videos):
+            title = video.get('title', '제목 없음')[:40]
+            duration = video.get('duration', 0)
+            views = video.get('views', 0)
+            
+            # Format duration
+            duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "N/A"
+            
+            message += f"{i+1}. **{title}**\n"
+            message += f"   ⏱ {duration_str} | 👁 {views}회\n\n"
+            
+            # Add buttons for each video
+            video_id = video.get('id')
+            file_id = video.get('file_id')
+            
+            buttons.append([
+                InlineKeyboardButton("🎬 스트리밍", callback_data=f"stream|{video_id}"),
+                InlineKeyboardButton("⭐ 즐겨찾기", callback_data=f"fav|{video_id}")
+            ])
+        
+        # Navigation buttons
+        nav_buttons = []
+        if page > 0:
+            nav_buttons.append(InlineKeyboardButton("◀️ 이전", callback_data=f"lib_prev|{page}"))
+        if has_more:
+            nav_buttons.append(InlineKeyboardButton("다음 ▶️", callback_data=f"lib_next|{page}"))
+        
+        if nav_buttons:
+            buttons.append(nav_buttons)
+        
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error in library_command: {e}")
+        await update.effective_message.reply_text("라이브러리를 불러오는 중 오류가 발생했습니다. 😭")
+
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /search command."""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        await update.effective_message.reply_text(
+            "검색어를 입력해주세요!\n"
+            "예: /search 뮤직비디오"
+        )
+        return
+    
+    keyword = ' '.join(context.args)
+    
+    try:
+        videos = await search_user_videos(user_id, keyword, limit=10)
+        
+        if not videos:
+            await update.effective_message.reply_text(
+                f"'{keyword}'에 대한 검색 결과가 없습니다. 🔍"
+            )
+            return
+        
+        message = f"🔍 **검색 결과: '{keyword}'**\n\n"
+        
+        buttons = []
+        for i, video in enumerate(videos):
+            title = video.get('title', '제목 없음')[:40]
+            duration = video.get('duration', 0)
+            duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "N/A"
+            
+            message += f"{i+1}. **{title}** (⏱ {duration_str})\n"
+            
+            video_id = video.get('id')
+            buttons.append([
+                InlineKeyboardButton("🎬 스트리밍", callback_data=f"stream|{video_id}"),
+                InlineKeyboardButton("⭐ 즐겨찾기", callback_data=f"fav|{video_id}")
+            ])
+        
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error in search_command: {e}")
+        await update.effective_message.reply_text("검색 중 오류가 발생했습니다. 😭")
+
+
+async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /recent command."""
+    user_id = update.effective_user.id
+    
+    try:
+        videos = await get_recent_videos(user_id, limit=5)
+        
+        if not videos:
+            await update.effective_message.reply_text(
+                "아직 다운로드한 영상이 없어요! 🎬"
+            )
+            return
+        
+        message = "⏰ **최근 다운로드한 영상 (5개)**\n\n"
+        
+        buttons = []
+        for i, video in enumerate(videos):
+            title = video.get('title', '제목 없음')[:40]
+            duration = video.get('duration', 0)
+            duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "N/A"
+            
+            message += f"{i+1}. **{title}** (⏱ {duration_str})\n"
+            
+            video_id = video.get('id')
+            buttons.append([
+                InlineKeyboardButton("🎬 스트리밍", callback_data=f"stream|{video_id}"),
+                InlineKeyboardButton("⭐ 즐겨찾기", callback_data=f"fav|{video_id}")
+            ])
+        
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error in recent_command: {e}")
+        await update.effective_message.reply_text("최근 영상을 불러오는 중 오류가 발생했습니다. 😭")
+
+
+async def favorites_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /favorites command."""
+    user_id = update.effective_user.id
+    page = 0
+    videos_per_page = 10
+    offset = page * videos_per_page
+    
+    try:
+        videos = await get_user_favorites(user_id, limit=videos_per_page + 1, offset=offset)
+        
+        if not videos:
+            await update.effective_message.reply_text(
+                "즐겨찾기한 영상이 없어요! ⭐\n"
+                "영상 메시지에서 '⭐ 즐겨찾기' 버튼을 눌러 추가하세요!"
+            )
+            return
+        
+        has_more = len(videos) > videos_per_page
+        videos = videos[:videos_per_page]
+        
+        message = "⭐ **즐겨찾기 목록**\n\n"
+        
+        buttons = []
+        for i, video in enumerate(videos):
+            title = video.get('title', '제목 없음')[:40]
+            duration = video.get('duration', 0)
+            duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "N/A"
+            
+            message += f"{i+1}. **{title}** (⏱ {duration_str})\n"
+            
+            video_id = video.get('id')
+            buttons.append([
+                InlineKeyboardButton("🎬 스트리밍", callback_data=f"stream|{video_id}"),
+                InlineKeyboardButton("❌ 제거", callback_data=f"unfav|{video_id}")
+            ])
+        
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error in favorites_command: {e}")
+        await update.effective_message.reply_text("즐겨찾기 목록을 불러오는 중 오류가 발생했습니다. 😭")
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /stats command."""
+    user_id = update.effective_user.id
+    
+    try:
+        stats = await get_user_stats(await get_database(), user_id)
+        
+        if not stats:
+            await update.effective_message.reply_text("통계를 불러올 수 없습니다. 😭")
+            return
+        
+        user = stats['user']
+        video_count = stats['video_count']
+        total_storage = stats['total_storage']
+        favorites_count = stats['favorites_count']
+        
+        # Format storage size
+        storage_mb = total_storage / (1024 * 1024)
+        storage_str = f"{storage_mb:.2f} MB" if storage_mb < 1024 else f"{storage_mb / 1024:.2f} GB"
+        
+        tier_emoji = "👑" if user['tier'] == 'premium' else "🆓"
+        
+        message = (
+            f"📊 **내 통계**\n\n"
+            f"**등급:** {tier_emoji} {user['tier'].upper()}\n"
+            f"**총 다운로드:** {user['total_downloads']}회\n"
+            f"**오늘 다운로드:** {user['downloads_today']}/{user['daily_quota']}회\n"
+            f"**저장된 영상:** {video_count}개\n"
+            f"**즐겨찾기:** {favorites_count}개\n"
+            f"**총 저장 용량:** {storage_str}\n"
+        )
+        
+        await update.effective_message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error in stats_command: {e}")
+        await update.effective_message.reply_text("통계를 불러오는 중 오류가 발생했습니다. 😭")
+
+
+async def quota_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /quota command."""
+    user_id = update.effective_user.id
+    username = update.effective_user.username
+    
+    try:
+        has_quota, user = await check_quota(await get_database(), user_id, username)
+        
+        remaining = user['daily_quota'] - user['downloads_today']
+        
+        if user['tier'] == 'premium':
+            message = "👑 **프리미엄 사용자**\n\n무제한 다운로드를 즐기세요! 🎉"
+        else:
+            message = (
+                f"📊 **다운로드 할당량**\n\n"
+                f"**오늘 남은 횟수:** {remaining}/{user['daily_quota']}\n"
+                f"**사용한 횟수:** {user['downloads_today']}회\n\n"
+            )
+            
+            if remaining <= 0:
+                message += "⚠️ 오늘의 할당량을 모두 사용했습니다.\n내일 다시 시도해주세요!"
+            elif remaining <= 3:
+                message += "⚠️ 할당량이 얼마 남지 않았습니다!"
+        
+        await update.effective_message.reply_text(message, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error in quota_command: {e}")
+        await update.effective_message.reply_text("할당량을 확인하는 중 오류가 발생했습니다. 😭")
+
+
+async def popular_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /popular command."""
+    try:
+        videos = await get_popular_videos(limit=10)
+        
+        if not videos:
+            await update.effective_message.reply_text("아직 인기 영상이 없어요! 🎬")
+            return
+        
+        message = "🔥 **인기 영상 TOP 10**\n\n"
+        
+        buttons = []
+        for i, video in enumerate(videos):
+            title = video.get('title', '제목 없음')[:40]
+            views = video.get('views', 0)
+            
+            message += f"{i+1}. **{title}** (👁 {views}회)\n"
+            
+            video_id = video.get('id')
+            buttons.append([
+                InlineKeyboardButton("🎬 스트리밍", callback_data=f"stream|{video_id}")
+            ])
+        
+        reply_markup = InlineKeyboardMarkup(buttons)
+        await update.effective_message.reply_text(message, reply_markup=reply_markup, parse_mode='Markdown')
+        
+    except Exception as e:
+        logging.error(f"Error in popular_command: {e}")
+        await update.effective_message.reply_text("인기 영상을 불러오는 중 오류가 발생했습니다. 😭")
+
+
+async def grant_premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler for /grant_premium command (admin only)."""
+    if update.effective_user.id != ADMIN_USER_ID:
+        await update.effective_message.reply_text("⛔ 이 명령어는 관리자만 사용할 수 있습니다.")
+        return
+    
+    if not context.args or not context.args[0].isdigit():
+        await update.effective_message.reply_text(
+            "사용법: /grant_premium <user_id>\n"
+            "예: /grant_premium 123456789"
+        )
+        return
+    
+    target_user_id = int(context.args[0])
+    
+    try:
+        success = await set_user_tier(await get_database(), target_user_id, 'premium')
+        
+        if success:
+            await update.effective_message.reply_text(
+                f"✅ 사용자 {target_user_id}에게 프리미엄 등급을 부여했습니다!"
+            )
+        else:
+            await update.effective_message.reply_text("❌ 프리미엄 등급 부여에 실패했습니다.")
+            
+    except Exception as e:
+        logging.error(f"Error in grant_premium_command: {e}")
+        await update.effective_message.reply_text("오류가 발생했습니다. 😭")
+
+
 def main():
     """Start the bot."""
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -577,6 +1050,23 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    
+    # Library management commands
+    application.add_handler(CommandHandler("library", library_command))
+    application.add_handler(CommandHandler("list", library_command))
+    application.add_handler(CommandHandler("search", search_command))
+    application.add_handler(CommandHandler("recent", recent_command))
+    application.add_handler(CommandHandler("favorites", favorites_command))
+    
+    # Statistics and info commands
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("quota", quota_command))
+    application.add_handler(CommandHandler("popular", popular_command))
+    
+    # Admin commands
+    application.add_handler(CommandHandler("grant_premium", grant_premium_command))
+    
+    # Message and callback handlers
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(handle_callback))
     
