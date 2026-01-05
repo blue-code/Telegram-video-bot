@@ -53,7 +53,7 @@
   - [x] Sub-task: Telegram FileStreamer 연동 및 재생 페이지(HTML) 구현
 
 ## Phase 8: 대량 처리 및 고급 기능 [Pro]
-- [~] Task: 유튜브 플레이리스트 및 배치 다운로드 지원
-  - [ ] Sub-task: 플레이리스트 URL 감지 및 메타데이터 추출 로직 구현
-  - [ ] Sub-task: 배치 다운로드 관리자(Queue) 구현
-  - [ ] Sub-task: 스트리밍 링크 버튼 추가 (Phase 7 연동)
+- [x] Task: 유튜브 플레이리스트 및 배치 다운로드 지원 a7a7d69
+  - [x] Sub-task: 플레이리스트 URL 감지 및 메타데이터 추출 로직 구현
+  - [x] Sub-task: 배치 다운로드 관리자(Queue) 구현
+  - [x] Sub-task: 스트리밍 링크 버튼 추가 (Phase 7 연동)
