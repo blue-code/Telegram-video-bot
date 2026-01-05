@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSO
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import asyncio
 import os
 import httpx
 import logging
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TVB API", version="1.0.0")
 DEFAULT_USER_ID = 41509535
+MAX_WEB_UPLOAD_SIZE = 30 * 1024 * 1024  # 30MB safety buffer for Bot API limits.
 
 # Add CORS middleware
 app.add_middleware(
@@ -775,6 +777,15 @@ async def upload_file(
 
         logger.info("Temporary file saved: %s", tmp_path)
 
+        file_size = os.path.getsize(tmp_path)
+        if file_size > MAX_WEB_UPLOAD_SIZE:
+            size_mb = file_size / (1024 * 1024)
+            limit_mb = MAX_WEB_UPLOAD_SIZE / (1024 * 1024)
+            raise Exception(
+                f"File too large for web upload ({size_mb:.1f}MB). "
+                f"Max allowed is {limit_mb:.0f}MB."
+            )
+
         # Get Telegram credentials
         bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         bin_channel_id = os.getenv("BIN_CHANNEL_ID")
@@ -795,8 +806,15 @@ async def upload_file(
         # Upload to Telegram
         from telegram import Bot
         from telegram.constants import ParseMode
+        from telegram.request import HTTPXRequest
 
-        bot = Bot(token=bot_token)
+        request = HTTPXRequest(
+            connect_timeout=60,
+            read_timeout=600,
+            write_timeout=600,
+            pool_timeout=60
+        )
+        bot = Bot(token=bot_token, request=request)
 
         logger.info(
             "Uploading %s to Telegram chat_id=%s...",
@@ -808,9 +826,26 @@ async def upload_file(
         duration = 0
         thumbnail = ""
 
-        with open(tmp_path, "rb") as video_file:
-            try:
-                message = await bot.send_video(
+        async def send_with_retries(send_func, label):
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    return await send_func()
+                except Exception as send_error:
+                    last_error = send_error
+                    if attempt < 3:
+                        logger.warning(
+                            "%s attempt %s/3 failed: %s",
+                            label,
+                            attempt,
+                            send_error
+                        )
+                        await asyncio.sleep(2 * attempt)
+            raise last_error
+
+        async def send_video():
+            with open(tmp_path, "rb") as video_file:
+                return await bot.send_video(
                     chat_id=upload_chat_id,
                     video=video_file,
                     caption=(
@@ -818,41 +853,41 @@ async def upload_file(
                         f"👤 User: {user_id}"
                     ),
                     parse_mode=ParseMode.HTML,
-                    supports_streaming=True,
-                    read_timeout=300,
-                    write_timeout=300,
-                    connect_timeout=60
+                    supports_streaming=True
                 )
-                if not message.video:
-                    raise Exception("Telegram did not return video metadata")
-                file_id = message.video.file_id
-                duration = message.video.duration or 0
-                thumbnail = (
-                    message.video.thumbnail.file_id
-                    if message.video.thumbnail else ""
-                )
-            except Exception as upload_error:
-                logger.warning(
-                    "send_video failed for %s: %s",
-                    file.filename,
-                    upload_error
-                )
-                video_file.seek(0)
-                message = await bot.send_document(
+
+        async def send_document():
+            with open(tmp_path, "rb") as video_file:
+                return await bot.send_document(
                     chat_id=upload_chat_id,
                     document=video_file,
                     caption=(
                         f"📤 <b>Web Upload</b>\n📁 {file.filename}\n"
                         f"👤 User: {user_id}"
                     ),
-                    parse_mode=ParseMode.HTML,
-                    read_timeout=300,
-                    write_timeout=300,
-                    connect_timeout=60
+                    parse_mode=ParseMode.HTML
                 )
-                if not message.document:
-                    raise Exception("Telegram upload failed")
-                file_id = message.document.file_id
+
+        try:
+            message = await send_with_retries(send_video, "send_video")
+            if not message.video:
+                raise Exception("Telegram did not return video metadata")
+            file_id = message.video.file_id
+            duration = message.video.duration or 0
+            thumbnail = (
+                message.video.thumbnail.file_id
+                if message.video.thumbnail else ""
+            )
+        except Exception as upload_error:
+            logger.warning(
+                "send_video failed for %s: %s",
+                file.filename,
+                upload_error
+            )
+            message = await send_with_retries(send_document, "send_document")
+            if not message.document:
+                raise Exception("Telegram upload failed")
+            file_id = message.document.file_id
 
         logger.info("Upload successful! file_id: %s", file_id)
 
