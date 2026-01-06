@@ -816,14 +816,22 @@ async def web_download(
         temp_dir = tempfile.mkdtemp()
         output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
         
+        is_audio = str(quality).lower() in {"audio", "bestaudio"}
+        if is_audio:
+            format_spec = "bestaudio"
+        elif str(quality).isdigit():
+            format_spec = f"bestvideo[height<={quality}]+bestaudio/best"
+        else:
+            format_spec = "bestvideo+bestaudio/best"
+
         ydl_opts = {
-            'format': f'bestvideo[height<={quality}]+bestaudio/best' if quality != 'audio' else 'bestaudio',
+            'format': format_spec,
             'outtmpl': output_template,
             'quiet': False,
             'no_warnings': False,
         }
         
-        if quality == 'audio':
+        if is_audio:
             ydl_opts['postprocessors'] = [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
