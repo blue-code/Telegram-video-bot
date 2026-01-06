@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Header, Body, File, UploadFile, Form
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -15,8 +15,11 @@ import shutil
 from urllib.parse import quote
 from datetime import datetime
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, Tuple
 from pathlib import Path
+import hashlib
+import time
+import re
 
 # Initialize
 load_dotenv()
@@ -42,6 +45,11 @@ templates = Jinja2Templates(directory="templates")
 # Create static directory if not exists and mount it
 Path("static").mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# File info cache for metadata (file_path, file_size, etc.)
+# Format: {file_id: {"url": str, "size": int, "timestamp": float}}
+file_info_cache = {}
+CACHE_TTL = 3600  # 1 hour cache TTL
 
 
 # Utility Functions
@@ -121,22 +129,29 @@ def build_thumbnail_url(thumbnail: str) -> str:
 
 
 # Mock DB or Bot interaction for now
-async def get_file_path_from_telegram(file_id):
+async def get_file_info_cached(file_id: str) -> Tuple[str, Optional[int]]:
     """
-    In a real scenario, we would need to:
-    1. Get file_path from getFile API using bot token
-    2. Construct download URL: https://api.telegram.org/file/bot<token>/<file_path>
+    Get file download URL and size from Telegram, with caching.
+    Returns (download_url, file_size_or_none)
     """
     file_id = str(file_id).strip() if file_id is not None else ""
     if not file_id:
         raise HTTPException(status_code=404, detail="File ID is empty")
-
+    
+    # Check cache
+    now = time.time()
+    if file_id in file_info_cache:
+        cached = file_info_cache[file_id]
+        if now - cached.get("timestamp", 0) < CACHE_TTL:
+            logger.debug(f"Cache hit for file_id={file_id}")
+            return cached["url"], cached.get("size")
+    
+    # Cache miss or expired - fetch from Telegram
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise HTTPException(status_code=500, detail="Bot token not valid")
-        
+    
     async with httpx.AsyncClient() as client:
-        # 1. Get File Path
         resp = await client.get(
             f"https://api.telegram.org/bot{token}/getFile",
             params={"file_id": file_id}
@@ -156,9 +171,68 @@ async def get_file_path_from_telegram(file_id):
                     detail="File too large for Telegram download. Reupload with smaller chunks."
                 )
             raise HTTPException(status_code=404, detail="File not found on Telegram")
-            
+        
         file_path = data["result"]["file_path"]
-        return f"https://api.telegram.org/file/bot{token}/{file_path}"
+        file_size = data["result"].get("file_size")
+        download_url = f"https://api.telegram.org/file/bot{token}/{file_path}"
+        
+        # Update cache
+        file_info_cache[file_id] = {
+            "url": download_url,
+            "size": file_size,
+            "timestamp": now
+        }
+        logger.debug(f"Cache updated for file_id={file_id}")
+        
+        return download_url, file_size
+
+
+async def get_file_path_from_telegram(file_id):
+    """
+    Legacy function for backward compatibility.
+    In a real scenario, we would need to:
+    1. Get file_path from getFile API using bot token
+    2. Construct download URL: https://api.telegram.org/file/bot<token>/<file_path>
+    """
+    url, _ = await get_file_info_cached(file_id)
+    return url
+
+
+def parse_range_header(range_header: str, file_size: int) -> Optional[Tuple[int, int]]:
+    """
+    Parse HTTP Range header.
+    Returns (start, end) tuple or None if invalid.
+    """
+    if not range_header:
+        return None
+    
+    # Parse "bytes=start-end" format
+    match = re.match(r'bytes=(\d+)-(\d*)', range_header)
+    if not match:
+        return None
+    
+    start = int(match.group(1))
+    end_str = match.group(2)
+    
+    if end_str:
+        end = int(end_str)
+    else:
+        end = file_size - 1
+    
+    # Validate range
+    if start < 0 or start >= file_size:
+        return None
+    if end >= file_size:
+        end = file_size - 1
+    if start > end:
+        return None
+    
+    return start, end
+
+
+def generate_etag(file_id: str) -> str:
+    """Generate ETag for a file using SHA-256."""
+    return hashlib.sha256(file_id.encode()).hexdigest()[:32]
 
 
 # Health Check
@@ -255,12 +329,72 @@ async def watch_video(request: Request, short_id: str):
 
 
 @app.get("/stream/{file_id}")
-async def stream_video(file_id: str):
-    """Proxy stream from Telegram to Browser"""
+async def stream_video(
+    file_id: str,
+    range: Optional[str] = Header(None),
+    if_none_match: Optional[str] = Header(None)
+):
+    """
+    Proxy stream from Telegram to Browser with Range request support.
+    Supports HTTP Range requests for video seeking.
+    """
     try:
-        download_url = await get_file_path_from_telegram(file_id)
+        # Get file info (URL and size) with caching
+        download_url, file_size = await get_file_info_cached(file_id)
         
-        # Create a generator to stream chunks
+        # Generate ETag for caching
+        etag = generate_etag(file_id)
+        
+        # Check If-None-Match for 304 Not Modified
+        if if_none_match and if_none_match == etag:
+            return Response(status_code=304)
+        
+        # Parse Range header
+        range_tuple = None
+        if range and file_size:
+            range_tuple = parse_range_header(range, file_size)
+        
+        # Prepare headers
+        headers = {
+            "Accept-Ranges": "bytes",
+            "ETag": etag,
+            "Cache-Control": "public, max-age=3600",
+        }
+        
+        # Handle Range request
+        if range_tuple and file_size:
+            start, end = range_tuple
+            content_length = end - start + 1
+            
+            headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+            headers["Content-Length"] = str(content_length)
+            
+            logger.info(f"Range request: {start}-{end}/{file_size} for file_id={file_id}")
+            
+            # Create a generator to stream the requested byte range
+            async def iter_range():
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(60.0, read=600.0),
+                    follow_redirects=True
+                ) as client:
+                    # Request the specific range from Telegram
+                    range_headers = {"Range": f"bytes={start}-{end}"}
+                    async with client.stream("GET", download_url, headers=range_headers) as r:
+                        r.raise_for_status()
+                        async for chunk in r.aiter_bytes(chunk_size=65536):
+                            yield chunk
+            
+            return StreamingResponse(
+                iter_range(),
+                status_code=206,
+                media_type="video/mp4",
+                headers=headers
+            )
+        
+        # Full file request (no Range header)
+        if file_size:
+            headers["Content-Length"] = str(file_size)
+        
         async def iter_file():
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0, read=600.0),
@@ -268,10 +402,14 @@ async def stream_video(file_id: str):
             ) as client:
                 async with client.stream("GET", download_url) as r:
                     r.raise_for_status()
-                    async for chunk in r.aiter_bytes():
+                    async for chunk in r.aiter_bytes(chunk_size=65536):
                         yield chunk
-
-        return StreamingResponse(iter_file(), media_type="video/mp4")
+        
+        return StreamingResponse(
+            iter_file(),
+            media_type="video/mp4",
+            headers=headers
+        )
         
     except Exception as e:
         logging.error("Streaming error (%s): %r", type(e).__name__, e)
@@ -305,7 +443,10 @@ async def stream_thumbnail(file_id: str):
 
 @app.get("/stream/concat/{short_id}")
 async def stream_concat(short_id: str):
-    """Proxy stream for multi-part videos by concatenating parts with ffmpeg."""
+    """
+    Proxy stream for multi-part videos by concatenating parts with ffmpeg.
+    Improved with better chunk size and buffering.
+    """
     from src.db import get_video_by_short_id
 
     try:
@@ -343,7 +484,7 @@ async def stream_concat(short_id: str):
                     async with client.stream("GET", url) as r:
                         r.raise_for_status()
                         with open(dest_path, "wb") as out_file:
-                            async for chunk in r.aiter_bytes():
+                            async for chunk in r.aiter_bytes(chunk_size=131072):  # 128KB chunks
                                 out_file.write(chunk)
                     return
                 except Exception as err:
@@ -411,7 +552,8 @@ async def stream_concat(short_id: str):
             async def iter_concat():
                 try:
                     while True:
-                        chunk = await process.stdout.read(1024 * 256)
+                        # Increased chunk size from 256KB to 512KB for better throughput
+                        chunk = await process.stdout.read(1024 * 512)
                         if not chunk:
                             break
                         yield chunk
@@ -436,8 +578,9 @@ async def stream_concat(short_id: str):
             async def iter_concat():
                 try:
                     while True:
+                        # Increased chunk size for better throughput
                         chunk = await asyncio.to_thread(
-                            process.stdout.read, 1024 * 256
+                            process.stdout.read, 1024 * 512
                         )
                         if not chunk:
                             break
@@ -454,7 +597,14 @@ async def stream_concat(short_id: str):
                     except Exception:
                         pass
 
-        return StreamingResponse(iter_concat(), media_type="video/mp4")
+        return StreamingResponse(
+            iter_concat(),
+            media_type="video/mp4",
+            headers={
+                "Cache-Control": "public, max-age=3600",
+                "Accept-Ranges": "none"  # FFmpeg pipe doesn't support range requests
+            }
+        )
     except HTTPException:
         raise
     except Exception as e:

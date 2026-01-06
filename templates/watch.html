@@ -119,9 +119,27 @@
             border-radius: 50%;
             animation: spin 1s linear infinite;
             display: none;
+            z-index: 10;
         }
 
         .loading-spinner.active {
+            display: block;
+        }
+
+        .buffering-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            display: none;
+            z-index: 10;
+        }
+
+        .buffering-indicator.active {
             display: block;
         }
 
@@ -295,6 +313,7 @@
                     Your browser does not support the video tag.
                 </video>
                 <div class="loading-spinner" id="loading-spinner"></div>
+                <div class="buffering-indicator" id="buffering-indicator">⏳ Buffering...</div>
             </div>
 
             <div class="error-message" id="error-message">
@@ -338,8 +357,13 @@
     <div class="toast" id="toast"></div>
 
     <script>
+        // Configuration constants
+        const BUFFER_LOW_THRESHOLD = 5; // seconds
+        const BUFFERING_INDICATOR_DELAY = 1000; // milliseconds
+        
         const video = document.getElementById('video-player');
         const loadingSpinner = document.getElementById('loading-spinner');
+        const bufferingIndicator = document.getElementById('buffering-indicator');
         const errorMessage = document.getElementById('error-message');
         const downloadBtn = document.getElementById('download-btn');
         const shareBtn = document.getElementById('share-btn');
@@ -360,6 +384,7 @@
         const concatUrl = `/stream/concat/${shortId}`;
         let concatFailed = false;
         let usePartsPlayback = playlistTotal <= 1;
+        let bufferingTimeout = null;
 
         function updatePartMeta() {
             if (playlistTotal <= 1 || !usePartsPlayback) {
@@ -406,18 +431,63 @@
             })
             .catch(err => console.error('View tracking error:', err));
 
-        // Show loading spinner
+        // Show loading spinner and buffering indicator
         video.addEventListener('waiting', () => {
             loadingSpinner.classList.add('active');
+            // Show buffering indicator after delay
+            bufferingTimeout = setTimeout(() => {
+                bufferingIndicator.classList.add('active');
+            }, BUFFERING_INDICATOR_DELAY);
         });
 
         video.addEventListener('canplay', () => {
             loadingSpinner.classList.remove('active');
+            bufferingIndicator.classList.remove('active');
+            if (bufferingTimeout) {
+                clearTimeout(bufferingTimeout);
+                bufferingTimeout = null;
+            }
+        });
+
+        video.addEventListener('playing', () => {
+            loadingSpinner.classList.remove('active');
+            bufferingIndicator.classList.remove('active');
+            if (bufferingTimeout) {
+                clearTimeout(bufferingTimeout);
+                bufferingTimeout = null;
+            }
+        });
+
+        video.addEventListener('loadstart', () => {
+            loadingSpinner.classList.add('active');
+        });
+
+        video.addEventListener('loadeddata', () => {
+            loadingSpinner.classList.remove('active');
+        });
+
+        // Monitor buffer health
+        video.addEventListener('progress', () => {
+            if (video.buffered.length > 0) {
+                const bufferedEnd = video.buffered.end(video.buffered.length - 1);
+                const currentTime = video.currentTime;
+                const bufferedAhead = bufferedEnd - currentTime;
+                
+                // Low buffer warning (could be used for preloading next part)
+                if (bufferedAhead < BUFFER_LOW_THRESHOLD && usePartsPlayback && currentIndex + 1 < playlist.length) {
+                    // Could trigger prefetch of next part here in future
+                }
+            }
         });
 
         // Handle errors
         video.addEventListener('error', () => {
             loadingSpinner.classList.remove('active');
+            bufferingIndicator.classList.remove('active');
+            if (bufferingTimeout) {
+                clearTimeout(bufferingTimeout);
+                bufferingTimeout = null;
+            }
             if (playlistTotal > 1 && !concatFailed) {
                 concatFailed = true;
                 usePartsPlayback = true;
