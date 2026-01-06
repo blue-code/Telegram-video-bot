@@ -357,6 +357,10 @@
     <div class="toast" id="toast"></div>
 
     <script>
+        // Configuration constants
+        const BUFFER_LOW_THRESHOLD = 5; // seconds
+        const BUFFERING_INDICATOR_DELAY = 1000; // milliseconds
+        
         const video = document.getElementById('video-player');
         const loadingSpinner = document.getElementById('loading-spinner');
         const bufferingIndicator = document.getElementById('buffering-indicator');
@@ -430,10 +434,10 @@
         // Show loading spinner and buffering indicator
         video.addEventListener('waiting', () => {
             loadingSpinner.classList.add('active');
-            // Show buffering indicator after 1 second of waiting
+            // Show buffering indicator after delay
             bufferingTimeout = setTimeout(() => {
                 bufferingIndicator.classList.add('active');
-            }, 1000);
+            }, BUFFERING_INDICATOR_DELAY);
         });
 
         video.addEventListener('canplay', () => {
@@ -470,7 +474,7 @@
                 const bufferedAhead = bufferedEnd - currentTime;
                 
                 // Low buffer warning (could be used for preloading next part)
-                if (bufferedAhead < 5 && usePartsPlayback && currentIndex + 1 < playlist.length) {
+                if (bufferedAhead < BUFFER_LOW_THRESHOLD && usePartsPlayback && currentIndex + 1 < playlist.length) {
                     // Could trigger prefetch of next part here in future
                 }
             }
