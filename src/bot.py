@@ -5,6 +5,7 @@ import asyncio
 import time
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, filters, CallbackQueryHandler
+from telegram.error import Conflict
 from telegram.request import HTTPXRequest
 from dotenv import load_dotenv
 
@@ -37,6 +38,12 @@ ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Log uncaught exceptions from the Telegram polling loop."""
+    if isinstance(context.error, Conflict):
+        logging.error("Bot conflict detected: %s", context.error)
+        if os.getenv("BOT_CONFLICT_EXIT") == "1":
+            logging.error("Exiting due to BOT_CONFLICT_EXIT for retry.")
+            os._exit(2)
+        return
     logging.error("Unhandled exception in bot: %r", context.error, exc_info=context.error)
 
 def get_progress_bar(percentage):
