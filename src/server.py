@@ -231,49 +231,8 @@ def parse_range_header(range_header: str, file_size: int) -> Optional[Tuple[int,
 
 
 def generate_etag(file_id: str) -> str:
-    """Generate ETag for a file."""
-    return hashlib.md5(file_id.encode()).hexdigest()
-
-
-# Mock DB or Bot interaction for now
-async def get_file_path_from_telegram(file_id):
-    """
-    In a real scenario, we would need to:
-    1. Get file_path from getFile API using bot token
-    2. Construct download URL: https://api.telegram.org/file/bot<token>/<file_path>
-    """
-    file_id = str(file_id).strip() if file_id is not None else ""
-    if not file_id:
-        raise HTTPException(status_code=404, detail="File ID is empty")
-
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise HTTPException(status_code=500, detail="Bot token not valid")
-        
-    async with httpx.AsyncClient() as client:
-        # 1. Get File Path
-        resp = await client.get(
-            f"https://api.telegram.org/bot{token}/getFile",
-            params={"file_id": file_id}
-        )
-        data = resp.json()
-        
-        if not data.get("ok"):
-            description = data.get("description", "Unknown error")
-            logger.error(
-                "Telegram getFile failed for file_id=%s: %s",
-                file_id,
-                description
-            )
-            if "file is too big" in description.lower():
-                raise HTTPException(
-                    status_code=413,
-                    detail="File too large for Telegram download. Reupload with smaller chunks."
-                )
-            raise HTTPException(status_code=404, detail="File not found on Telegram")
-            
-        file_path = data["result"]["file_path"]
-        return f"https://api.telegram.org/file/bot{token}/{file_path}"
+    """Generate ETag for a file using SHA-256."""
+    return hashlib.sha256(file_id.encode()).hexdigest()[:32]
 
 
 # Health Check

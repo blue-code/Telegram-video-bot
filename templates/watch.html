@@ -469,9 +469,9 @@
                 const currentTime = video.currentTime;
                 const bufferedAhead = bufferedEnd - currentTime;
                 
-                // Log buffer status for debugging
-                if (bufferedAhead < 5) {
-                    console.log(`Buffer low: ${bufferedAhead.toFixed(2)}s ahead`);
+                // Low buffer warning (could be used for preloading next part)
+                if (bufferedAhead < 5 && usePartsPlayback && currentIndex + 1 < playlist.length) {
+                    // Could trigger prefetch of next part here in future
                 }
             }
         });
