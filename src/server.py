@@ -241,6 +241,7 @@ async def watch_video(request: Request, short_id: str):
             "view_count": video.get('views', 0),
             "duration": format_duration(video.get('duration', 0)),
             "upload_date": format_date(video.get('created_at')),
+            "user_id": video.get("user_id") or DEFAULT_USER_ID,
             "playlist": playlist,
             "playlist_total": len(playlist)
         })
