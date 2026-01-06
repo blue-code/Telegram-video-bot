@@ -855,18 +855,278 @@ async def web_download(
         if not bot_token or not bin_channel_id:
             raise Exception("Telegram credentials not configured")
         
+        upload_chat_id = bin_channel_id.strip()
+        try:
+            upload_chat_id = int(upload_chat_id)
+        except ValueError:
+            pass
+
         # Upload to Telegram
         from telegram import Bot
         from telegram.constants import ParseMode
-        
-        bot = Bot(token=bot_token)
-        
+        from telegram.request import HTTPXRequest
+
+        request = HTTPXRequest(
+            connect_timeout=60,
+            read_timeout=600,
+            write_timeout=600,
+            pool_timeout=60
+        )
+        bot = Bot(token=bot_token, request=request)
+
+        async def send_with_retries(send_func, label):
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    return await send_func()
+                except Exception as send_error:
+                    last_error = send_error
+                    if attempt < 3:
+                        logger.warning(
+                            "%s attempt %s/3 failed: %s",
+                            label,
+                            attempt,
+                            send_error
+                        )
+                        await asyncio.sleep(2 * attempt)
+            raise last_error
+
+        async def create_thumbnail_file(source_path: str, duration_hint: float) -> str:
+            if not shutil.which("ffmpeg"):
+                return ""
+
+            if duration_hint and duration_hint > 2:
+                thumb_time = min(max(duration_hint * 0.1, 1), duration_hint - 1)
+            else:
+                thumb_time = 1
+
+            tmp_thumb = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".jpg"
+            )
+            tmp_thumb.close()
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-ss", str(thumb_time),
+                "-i", source_path,
+                "-frames:v", "1",
+                "-q:v", "2",
+                tmp_thumb.name
+            ]
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                returncode = process.returncode
+            except NotImplementedError:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout = result.stdout
+                stderr = result.stderr
+                returncode = result.returncode
+
+            if returncode != 0:
+                error_msg = stderr.decode(errors="replace")
+                logger.warning("Thumbnail generation failed: %s", error_msg)
+                try:
+                    os.unlink(tmp_thumb.name)
+                except OSError:
+                    pass
+                return ""
+
+            return tmp_thumb.name
+
+        async def upload_thumbnail(path: str) -> str:
+            if not path:
+                return ""
+            with open(path, "rb") as image_file:
+                message = await send_with_retries(
+                    lambda: bot.send_photo(
+                        chat_id=upload_chat_id,
+                        photo=image_file,
+                        caption="🖼️ Thumbnail"
+                    ),
+                    "send_photo"
+                )
+            if message.photo:
+                return message.photo[-1].file_id
+            return ""
+
+        async def send_document(path, caption):
+            with open(path, "rb") as video_file:
+                return await bot.send_document(
+                    chat_id=upload_chat_id,
+                    document=video_file,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML
+                )
+
+        file_size = os.path.getsize(downloaded_file) if downloaded_file else 0
+        if not is_audio and file_size > MAX_WEB_UPLOAD_SIZE:
+            if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+                raise Exception(
+                    "FFmpeg/ffprobe not found. Install FFmpeg and ensure "
+                    "ffmpeg/ffprobe are available in PATH."
+                )
+
+            logger.info(
+                "Downloaded file exceeds limit (%.1fMB). Splitting before upload.",
+                file_size / (1024 * 1024)
+            )
+            from src.splitter import split_video, get_video_duration
+
+            total_duration = info.get("duration") or 0
+            if not total_duration:
+                try:
+                    total_duration = await get_video_duration(downloaded_file)
+                except Exception:
+                    total_duration = 0
+
+            parts = await split_video(downloaded_file, MAX_WEB_UPLOAD_SIZE, transcode=False)
+            total_parts = len(parts)
+            parts_metadata = []
+            master_file_id = None
+            master_thumbnail = ""
+            thumbnail_temp_path = ""
+
+            try:
+                thumbnail_temp_path = await create_thumbnail_file(
+                    downloaded_file,
+                    total_duration
+                )
+                if thumbnail_temp_path:
+                    master_thumbnail = await upload_thumbnail(thumbnail_temp_path)
+            except Exception as thumb_error:
+                logger.warning("Thumbnail upload failed: %s", thumb_error)
+
+            for index, part_path in enumerate(parts, start=1):
+                part_title = f"{title} (Part {index}/{total_parts})"
+                caption = f"🌐 <b>Web Download</b>\n🎬 {part_title}\n🔗 {url[:100]}..."
+
+                message = await send_with_retries(
+                    lambda: send_document(part_path, caption),
+                    "send_document"
+                )
+                if message.document:
+                    part_file_id = message.document.file_id
+                    part_duration = 0
+                elif message.video:
+                    part_file_id = message.video.file_id
+                    part_duration = message.video.duration or 0
+                else:
+                    raise Exception("Telegram upload failed")
+
+                if part_duration == 0:
+                    try:
+                        part_duration = await get_video_duration(part_path)
+                    except Exception:
+                        part_duration = 0
+
+                if master_file_id is None:
+                    master_file_id = part_file_id
+
+                parts_metadata.append({
+                    "part": index,
+                    "total": total_parts,
+                    "title": part_title,
+                    "file_id": part_file_id,
+                    "duration": part_duration or 0,
+                    "type": "video"
+                })
+
+            metadata = {
+                "parts": parts_metadata,
+                "part_index": 1,
+                "part_total": total_parts,
+                "is_master": True
+            }
+
+            from src.db import get_database
+            from src.link_shortener import create_short_link
+            sb = await get_database()
+
+            video_data = {
+                "file_id": master_file_id,
+                "title": title,
+                "duration": total_duration,
+                "thumbnail": master_thumbnail,
+                "user_id": user_id,
+                "url": url,
+                "metadata": metadata
+            }
+
+            video_id = None
+            try:
+                result = await sb.table("videos").insert(video_data).execute()
+                if result.data:
+                    video_id = result.data[0].get("id")
+            except Exception as db_error:
+                logger.error("Video metadata insert failed: %s", db_error)
+
+            if video_id is None and master_file_id:
+                try:
+                    lookup = await sb.table("videos").select("id").eq(
+                        "file_id", master_file_id
+                    ).eq("user_id", user_id).order(
+                        "created_at",
+                        desc=True
+                    ).limit(1).execute()
+                    if lookup.data:
+                        video_id = lookup.data[0].get("id")
+                except Exception as lookup_error:
+                    logger.warning(
+                        "Video lookup after insert failed: %s",
+                        lookup_error
+                    )
+
+            short_id = await create_short_link(
+                sb,
+                master_file_id,
+                video_id,
+                user_id
+            )
+
+            logger.info("Upload successful! file_id: %s", master_file_id)
+
+            if downloaded_file and os.path.exists(downloaded_file):
+                os.unlink(downloaded_file)
+            if temp_dir and os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+            for path in parts:
+                if path != downloaded_file and os.path.exists(path):
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+            if thumbnail_temp_path and os.path.exists(thumbnail_temp_path):
+                try:
+                    os.unlink(thumbnail_temp_path)
+                except OSError:
+                    pass
+
+            return {
+                "success": True,
+                "short_id": short_id,
+                "title": title,
+                "message": "✅ Download and upload complete!"
+            }
+
         logger.info(f"Uploading {title} to Telegram...")
-        
+
         with open(downloaded_file, 'rb') as video_file:
-            if quality == 'audio':
+            if is_audio:
                 message = await bot.send_audio(
-                    chat_id=bin_channel_id,
+                    chat_id=upload_chat_id,
                     audio=video_file,
                     caption=f"🌐 <b>Web Download</b>\n🎵 {title}\n🔗 {url[:100]}...",
                     parse_mode=ParseMode.HTML,
@@ -878,7 +1138,7 @@ async def web_download(
                 thumbnail = message.audio.thumbnail.file_id if message.audio.thumbnail else ""
             else:
                 message = await bot.send_video(
-                    chat_id=bin_channel_id,
+                    chat_id=upload_chat_id,
                     video=video_file,
                     caption=f"🌐 <b>Web Download</b>\n🎬 {title}\n🔗 {url[:100]}...",
                     parse_mode=ParseMode.HTML,
