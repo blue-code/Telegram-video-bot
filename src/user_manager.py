@@ -2,6 +2,7 @@
 User management and quota system for Telegram Video Bot.
 """
 import logging
+import os
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -9,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FREE_QUOTA = 10
 DEFAULT_PREMIUM_QUOTA = 999999  # Effectively unlimited
+SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 
 
 async def get_or_create_user(db_client, telegram_id: int, username: Optional[str] = None) -> dict:
@@ -203,7 +205,10 @@ async def get_user_stats(db_client, telegram_id: int) -> Optional[dict]:
         user = user_result.data[0]
         
         # Get video count (exclude split parts)
-        videos_result = await db_client.table("videos").select("id, metadata").eq("user_id", telegram_id).execute()
+        videos_query = db_client.table("videos").select("id, metadata")
+        if telegram_id != SUPER_ADMIN_ID:
+            videos_query = videos_query.eq("user_id", telegram_id)
+        videos_result = await videos_query.execute()
         video_count = 0
         for video in videos_result.data or []:
             metadata = video.get("metadata") or {}
@@ -218,7 +223,10 @@ async def get_user_stats(db_client, telegram_id: int) -> Optional[dict]:
                 video_count += 1
         
         # Get total storage (sum of file sizes)
-        storage_result = await db_client.table("videos").select("file_size").eq("user_id", telegram_id).execute()
+        storage_query = db_client.table("videos").select("file_size")
+        if telegram_id != SUPER_ADMIN_ID:
+            storage_query = storage_query.eq("user_id", telegram_id)
+        storage_result = await storage_query.execute()
         total_storage = sum(v.get('file_size', 0) for v in storage_result.data) if storage_result.data else 0
         
         # Get favorites count

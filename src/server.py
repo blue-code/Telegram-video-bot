@@ -298,6 +298,28 @@ async def stream_concat(short_id: str):
             *[get_file_path_from_telegram(fid) for fid in file_ids]
         )
 
+        async def download_with_retries(client, url, dest_path, label):
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    async with client.stream("GET", url) as r:
+                        r.raise_for_status()
+                        with open(dest_path, "wb") as out_file:
+                            async for chunk in r.aiter_bytes():
+                                out_file.write(chunk)
+                    return
+                except Exception as err:
+                    last_error = err
+                    if attempt < 3:
+                        logger.warning(
+                            "Part download failed (%s attempt %s/3): %s",
+                            label,
+                            attempt,
+                            err
+                        )
+                        await asyncio.sleep(2 * attempt)
+            raise last_error
+
         temp_dir = tempfile.mkdtemp()
         list_path = os.path.join(temp_dir, "concat.txt")
         local_paths = []
@@ -308,11 +330,12 @@ async def stream_concat(short_id: str):
             ) as client:
                 for idx, url in enumerate(download_urls, start=1):
                     local_path = os.path.join(temp_dir, f"part_{idx}.mp4")
-                    async with client.stream("GET", url) as r:
-                        r.raise_for_status()
-                        with open(local_path, "wb") as out_file:
-                            async for chunk in r.aiter_bytes():
-                                out_file.write(chunk)
+                    await download_with_retries(
+                        client,
+                        url,
+                        local_path,
+                        f"part {idx}"
+                    )
                     local_paths.append(local_path)
 
             with open(list_path, "w", encoding="utf-8") as list_file:
@@ -329,10 +352,12 @@ async def stream_concat(short_id: str):
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
+            "-fflags", "+genpts",
             "-f", "concat",
             "-safe", "0",
             "-i", list_path,
             "-c", "copy",
+            "-avoid_negative_ts", "make_zero",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
             "-f", "mp4",
             "pipe:1"
@@ -1077,7 +1102,7 @@ async def upload_file(
             parts = await split_video(
                 tmp_path,
                 MAX_WEB_UPLOAD_SIZE,
-                transcode=True
+                transcode=False
             )
         else:
             parts = [tmp_path]

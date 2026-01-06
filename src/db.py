@@ -7,6 +7,7 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 VIDEO_TABLE = "videos"
+SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 
 client: AsyncClient = None
 
@@ -27,6 +28,9 @@ def _filter_master_videos(videos: list[dict]) -> list[dict]:
         if part_index_value <= 1:
             filtered.append(video)
     return filtered
+
+def _is_super_admin(user_id: int) -> bool:
+    return user_id == SUPER_ADMIN_ID
 
 async def get_database() -> AsyncClient:
     """Returns the Supabase async client instance."""
@@ -95,7 +99,9 @@ async def get_user_videos(user_id: int, filter: str = "all", search: str = "", l
         return []
     
     # Regular video query
-    query = sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id)
+    query = sb.table(VIDEO_TABLE).select("*")
+    if not _is_super_admin(user_id):
+        query = query.eq("user_id", user_id)
     
     # Apply search filter
     if search:
@@ -124,7 +130,10 @@ async def search_user_videos(user_id: int, keyword: str, limit: int = 10):
         List of matching video metadata
     """
     sb = await get_database()
-    result = await sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id).ilike("title", f"%{keyword}%").order("created_at", desc=True).limit(limit).execute()
+    query = sb.table(VIDEO_TABLE).select("*").ilike("title", f"%{keyword}%")
+    if not _is_super_admin(user_id):
+        query = query.eq("user_id", user_id)
+    result = await query.order("created_at", desc=True).limit(limit).execute()
     videos = result.data if result.data else []
     return _filter_master_videos(videos)
 
@@ -141,7 +150,10 @@ async def get_recent_videos(user_id: int, limit: int = 5):
         List of recent video metadata
     """
     sb = await get_database()
-    result = await sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
+    query = sb.table(VIDEO_TABLE).select("*")
+    if not _is_super_admin(user_id):
+        query = query.eq("user_id", user_id)
+    result = await query.order("created_at", desc=True).limit(limit).execute()
     videos = result.data if result.data else []
     return _filter_master_videos(videos)
 
@@ -320,7 +332,7 @@ async def get_video_count(user_id: int = None, filter: str = "all"):
     
     query = sb.table(VIDEO_TABLE).select("id", count="exact")
     
-    if user_id:
+    if user_id and not _is_super_admin(user_id):
         query = query.eq("user_id", user_id)
     
     result = await query.execute()
@@ -477,7 +489,9 @@ async def search_videos(
     sb = await get_database()
     
     # Build query
-    q = sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id)
+    q = sb.table(VIDEO_TABLE).select("*")
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
     
     # Text search
     if query:

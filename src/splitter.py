@@ -1,6 +1,7 @@
 import asyncio
-import os
+import json
 import math
+import os
 import subprocess
 
 async def get_video_duration(file_path: str) -> float:
@@ -43,6 +44,61 @@ async def get_video_duration(file_path: str) -> float:
     logging.info(f"ffprobe duration: {duration}")
     return duration
 
+async def get_video_stream_metadata(file_path: str) -> dict:
+    """Get video stream metadata needed to preserve aspect ratio."""
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=sample_aspect_ratio,display_aspect_ratio:stream_tags=rotate",
+        "-of", "json",
+        file_path
+    ]
+
+    import logging
+    logging.info(f"Running ffprobe (metadata) for: {file_path}")
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+        returncode = process.returncode
+    except NotImplementedError:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        stdout = result.stdout
+        stderr = result.stderr
+        returncode = result.returncode
+
+    if returncode != 0:
+        error_msg = stderr.decode(errors="replace")
+        logging.error(f"ffprobe metadata failed: {error_msg}")
+        return {}
+
+    try:
+        data = json.loads(stdout.decode(errors="replace") or "{}")
+    except json.JSONDecodeError:
+        logging.warning("ffprobe metadata returned invalid JSON.")
+        return {}
+
+    streams = data.get("streams") or []
+    if not streams:
+        return {}
+
+    stream = streams[0] or {}
+    tags = stream.get("tags") or {}
+    return {
+        "sample_aspect_ratio": stream.get("sample_aspect_ratio"),
+        "display_aspect_ratio": stream.get("display_aspect_ratio"),
+        "rotate": tags.get("rotate")
+    }
+
 async def split_video(
     file_path: str,
     max_size_bytes: int = 2 * 1024 * 1024 * 1024,
@@ -51,7 +107,7 @@ async def split_video(
     """
     Splits video into chunks smaller than max_size_bytes.
     Returns list of file paths (including original if no split needed).
-    If transcode=True, re-encode with square pixels to preserve aspect ratio.
+    If transcode=True, re-encode while preserving display aspect ratio metadata.
     """
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -65,6 +121,9 @@ async def split_video(
     duration = await get_video_duration(file_path)
     num_parts = math.ceil(current_size / max_size_bytes)
     part_duration = duration / num_parts
+    stream_meta = {}
+    if transcode:
+        stream_meta = await get_video_stream_metadata(file_path)
     
     output_parts = []
     base_name, ext = os.path.splitext(file_path)
@@ -90,8 +149,18 @@ async def split_video(
         ]
 
         if transcode:
+            scale_filter = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            sar = (stream_meta.get("sample_aspect_ratio") or "").strip()
+            dar = (stream_meta.get("display_aspect_ratio") or "").strip()
+            rotate = stream_meta.get("rotate")
+
+            if sar and sar not in ("1:1", "1", "0:1", "N/A"):
+                scale_filter = (
+                    "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1"
+                )
+
             cmd += [
-                "-vf", "scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1",
+                "-vf", scale_filter,
                 "-c:v", "libx264",
                 "-crf", "18",
                 "-preset", "veryfast",
@@ -100,6 +169,10 @@ async def split_video(
                 "-b:a", "192k",
                 "-movflags", "+faststart"
             ]
+            if dar and dar not in ("0:1", "N/A"):
+                cmd += ["-aspect", dar]
+            if rotate:
+                cmd += ["-metadata:s:v:0", f"rotate={rotate}"]
         else:
             cmd += [
                 "-c", "copy" # Stream copy for speed
