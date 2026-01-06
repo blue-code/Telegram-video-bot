@@ -230,6 +230,10 @@
                         <span>⏱️</span>
                         <span>{{ duration }}</span>
                     </div>
+                    <div class="meta-item" id="part-meta" style="display: none;">
+                        <span>🧩</span>
+                        <span id="part-label"></span>
+                    </div>
                     <div class="meta-item">
                         <span>👁️</span>
                         <span id="view-count">{{ view_count }}</span> views
@@ -243,7 +247,6 @@
 
             <div class="video-container">
                 <video id="video-player" controls autoplay name="media">
-                    <source src="/stream/{{ file_id }}" type="video/mp4">
                     Your browser does not support the video tag.
                 </video>
                 <div class="loading-spinner" id="loading-spinner"></div>
@@ -301,6 +304,51 @@
         const container = document.getElementById('container');
         const toast = document.getElementById('toast');
         const shortId = '{{ short_id }}';
+        const playlist = {{ playlist | tojson }};
+        const playlistTotal = {{ playlist_total }};
+        const partMeta = document.getElementById('part-meta');
+        const partLabel = document.getElementById('part-label');
+        let currentIndex = Math.max(
+            0,
+            playlist.findIndex(item => item.file_id === '{{ file_id }}')
+        );
+        const concatUrl = `/stream/concat/${shortId}`;
+        let concatFailed = false;
+        let usePartsPlayback = playlistTotal <= 1;
+
+        function updatePartMeta() {
+            if (playlistTotal <= 1 || !usePartsPlayback) {
+                partMeta.style.display = 'none';
+                return;
+            }
+            const current = playlist[currentIndex];
+            const part = current?.part || currentIndex + 1;
+            partMeta.style.display = 'flex';
+            partLabel.textContent = `Part ${part} / ${playlistTotal}`;
+        }
+
+        function loadPart(index) {
+            if (index < 0 || index >= playlist.length) {
+                return;
+            }
+            currentIndex = index;
+            const current = playlist[currentIndex];
+            if (!current) {
+                return;
+            }
+            video.src = `/stream/${current.file_id}`;
+            video.load();
+            video.play().catch(() => {});
+            updatePartMeta();
+        }
+        
+        if (playlistTotal > 1) {
+            video.src = concatUrl;
+            usePartsPlayback = false;
+        } else {
+            loadPart(0);
+            usePartsPlayback = true;
+        }
 
         // Increment view count on page load
         fetch(`/api/increment-view/${shortId}`, { method: 'POST' })
@@ -325,6 +373,13 @@
         // Handle errors
         video.addEventListener('error', () => {
             loadingSpinner.classList.remove('active');
+            if (playlistTotal > 1 && !concatFailed) {
+                concatFailed = true;
+                usePartsPlayback = true;
+                loadPart(0);
+                showToast('Seamless stream unavailable. Switching to parts...');
+                return;
+            }
             errorMessage.classList.add('active');
         });
 
@@ -393,6 +448,17 @@
             video.playbackRate = parseFloat(e.target.value);
             showToast(`Speed set to ${e.target.value}x`);
         });
+
+        // Auto-play next part
+        video.addEventListener('ended', () => {
+            if (usePartsPlayback && currentIndex + 1 < playlist.length) {
+                loadPart(currentIndex + 1);
+            } else {
+                showToast('Playback complete');
+            }
+        });
+
+        updatePartMeta();
 
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {

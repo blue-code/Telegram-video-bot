@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Request, Header, Body, File, UploadFile, Form
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -8,6 +8,7 @@ import os
 import httpx
 import logging
 import json
+import subprocess
 import tempfile
 import shutil
 from datetime import datetime
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TVB API", version="1.0.0")
 DEFAULT_USER_ID = 41509535
-MAX_WEB_UPLOAD_SIZE = 30 * 1024 * 1024  # 30MB safety buffer for Bot API limits.
+MAX_WEB_UPLOAD_SIZE = 15 * 1024 * 1024  # 15MB to stay under Telegram getFile limit.
 
 # Add CORS middleware
 app.add_middleware(
@@ -114,16 +115,34 @@ async def get_file_path_from_telegram(file_id):
     1. Get file_path from getFile API using bot token
     2. Construct download URL: https://api.telegram.org/file/bot<token>/<file_path>
     """
+    file_id = str(file_id).strip() if file_id is not None else ""
+    if not file_id:
+        raise HTTPException(status_code=404, detail="File ID is empty")
+
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
         raise HTTPException(status_code=500, detail="Bot token not valid")
         
     async with httpx.AsyncClient() as client:
         # 1. Get File Path
-        resp = await client.get(f"https://api.telegram.org/bot{token}/getFile?file_id={file_id}")
+        resp = await client.get(
+            f"https://api.telegram.org/bot{token}/getFile",
+            params={"file_id": file_id}
+        )
         data = resp.json()
         
         if not data.get("ok"):
+            description = data.get("description", "Unknown error")
+            logger.error(
+                "Telegram getFile failed for file_id=%s: %s",
+                file_id,
+                description
+            )
+            if "file is too big" in description.lower():
+                raise HTTPException(
+                    status_code=413,
+                    detail="File too large for Telegram download. Reupload with smaller chunks."
+                )
             raise HTTPException(status_code=404, detail="File not found on Telegram")
             
         file_path = data["result"]["file_path"]
@@ -141,18 +160,67 @@ async def health_check():
 @app.get("/watch/{short_id}", response_class=HTMLResponse)
 async def watch_video(request: Request, short_id: str):
     """Enhanced video watch page with metadata"""
-    from src.db import get_video_by_short_id
+    from src.db import get_database, get_video_by_short_id, get_video_by_file_id
+    from src.link_shortener import get_or_create_short_link
     
     try:
+        if not shutil.which("ffmpeg"):
+            raise HTTPException(status_code=500, detail="FFmpeg not available")
+
         video = await get_video_by_short_id(short_id)
         
         if not video:
-            return templates.TemplateResponse("error.html", {
-                "request": request,
-                "error_code": 404,
-                "error_message": "Video not found"
-            })
+            # Fallback: short_id might actually be a file_id
+            video = await get_video_by_file_id(short_id)
+            if not video:
+                return templates.TemplateResponse("error.html", {
+                    "request": request,
+                    "error_code": 404,
+                    "error_message": "Video not found"
+                })
+            try:
+                sb = await get_database()
+                resolved_short_id = await get_or_create_short_link(
+                    sb,
+                    video.get("file_id"),
+                    video.get("id"),
+                    video.get("user_id") or DEFAULT_USER_ID
+                )
+                return RedirectResponse(
+                    url=f"/watch/{resolved_short_id}",
+                    status_code=302
+                )
+            except Exception as short_error:
+                logger.warning(
+                    "Failed to resolve short link for file_id=%s: %s",
+                    short_id,
+                    short_error
+                )
         
+        metadata = video.get("metadata") or {}
+        raw_parts = metadata.get("parts") or []
+        playlist = []
+        for idx, part in enumerate(raw_parts, start=1):
+            if part.get("type") == "audio":
+                continue
+            file_id = part.get("file_id")
+            if not file_id:
+                continue
+            playlist.append({
+                "file_id": file_id,
+                "short_id": part.get("short_id"),
+                "title": part.get("title", video.get("title", "Unknown")),
+                "part": part.get("part", idx)
+            })
+
+        if not playlist:
+            playlist = [{
+                "file_id": video.get("file_id", ""),
+                "short_id": short_id,
+                "title": video.get("title", "Unknown"),
+                "part": 1
+            }]
+
         return templates.TemplateResponse("watch.html", {
             "request": request,
             "short_id": short_id,
@@ -160,7 +228,9 @@ async def watch_video(request: Request, short_id: str):
             "video_title": video.get('title', 'Unknown'),
             "view_count": video.get('views', 0),
             "duration": format_duration(video.get('duration', 0)),
-            "upload_date": format_date(video.get('created_at'))
+            "upload_date": format_date(video.get('created_at')),
+            "playlist": playlist,
+            "playlist_total": len(playlist)
         })
     except Exception as e:
         logger.error(f"Error in watch_video: {e}")
@@ -179,15 +249,153 @@ async def stream_video(file_id: str):
         
         # Create a generator to stream chunks
         async def iter_file():
-            async with httpx.AsyncClient(timeout=None) as client:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0, read=600.0),
+                follow_redirects=True
+            ) as client:
                 async with client.stream("GET", download_url) as r:
+                    r.raise_for_status()
                     async for chunk in r.aiter_bytes():
                         yield chunk
 
         return StreamingResponse(iter_file(), media_type="video/mp4")
         
     except Exception as e:
-        logging.error(f"Streaming error: {e}")
+        logging.error("Streaming error (%s): %r", type(e).__name__, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stream/concat/{short_id}")
+async def stream_concat(short_id: str):
+    """Proxy stream for multi-part videos by concatenating parts with ffmpeg."""
+    from src.db import get_video_by_short_id
+
+    try:
+        video = await get_video_by_short_id(short_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        metadata = video.get("metadata") or {}
+        parts = metadata.get("parts") or []
+        if not parts:
+            file_id = video.get("file_id")
+            if not file_id:
+                raise HTTPException(status_code=404, detail="File not available")
+            return await stream_video(file_id)
+
+        file_ids = []
+        for part in sorted(parts, key=lambda p: p.get("part", 0)):
+            raw_id = part.get("file_id")
+            if not raw_id:
+                continue
+            cleaned = str(raw_id).strip()
+            if cleaned:
+                file_ids.append(cleaned)
+        if not file_ids:
+            raise HTTPException(status_code=404, detail="No parts available")
+
+        download_urls = await asyncio.gather(
+            *[get_file_path_from_telegram(fid) for fid in file_ids]
+        )
+
+        temp_dir = tempfile.mkdtemp()
+        list_path = os.path.join(temp_dir, "concat.txt")
+        local_paths = []
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0, read=600.0),
+                follow_redirects=True
+            ) as client:
+                for idx, url in enumerate(download_urls, start=1):
+                    local_path = os.path.join(temp_dir, f"part_{idx}.mp4")
+                    async with client.stream("GET", url) as r:
+                        r.raise_for_status()
+                        with open(local_path, "wb") as out_file:
+                            async for chunk in r.aiter_bytes():
+                                out_file.write(chunk)
+                    local_paths.append(local_path)
+
+            with open(list_path, "w", encoding="utf-8") as list_file:
+                for path in local_paths:
+                    list_file.write(f"file '{path}'\n")
+        except Exception:
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
+            raise
+
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", list_path,
+            "-c", "copy",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4",
+            "pipe:1"
+        ]
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            async def iter_concat():
+                try:
+                    while True:
+                        chunk = await process.stdout.read(1024 * 256)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    if process.returncode is None:
+                        process.terminate()
+                        try:
+                            await process.wait()
+                        except Exception:
+                            pass
+                    try:
+                        shutil.rmtree(temp_dir)
+                    except Exception:
+                        pass
+        except NotImplementedError:
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+
+            async def iter_concat():
+                try:
+                    while True:
+                        chunk = await asyncio.to_thread(
+                            process.stdout.read, 1024 * 256
+                        )
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except Exception:
+                            process.kill()
+                    try:
+                        shutil.rmtree(temp_dir)
+                    except Exception:
+                        pass
+
+        return StreamingResponse(iter_concat(), media_type="video/mp4")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error("Concat streaming error (%s): %r", type(e).__name__, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -195,18 +403,33 @@ async def stream_video(file_id: str):
 @app.get("/gallery/{user_id}", response_class=HTMLResponse)
 async def gallery_page(request: Request, user_id: int):
     """Gallery page showing user's videos"""
-    from src.db import get_user_videos
+    from src.db import get_database, get_user_videos
+    from src.link_shortener import get_or_create_short_link
     
     try:
+        sb = await get_database()
         videos = await get_user_videos(user_id, limit=100)
         
         formatted_videos = []
         for video in videos:
-            # Try to get short_id from shared_links if available
             short_id = video.get('short_id', '')
             if not short_id:
-                # Fall back to file_id
-                short_id = video.get('file_id', '')
+                file_id = video.get('file_id')
+                if file_id:
+                    try:
+                        short_id = await get_or_create_short_link(
+                            sb,
+                            file_id,
+                            video.get('id'),
+                            user_id
+                        )
+                    except Exception as short_error:
+                        logger.warning(
+                            "Short link lookup failed for file_id=%s: %s",
+                            file_id,
+                            short_error
+                        )
+                        short_id = file_id or ''
             
             formatted_videos.append({
                 'short_id': short_id,
@@ -298,7 +521,18 @@ async def download_video(short_id: str):
         
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
-        
+
+        metadata = video.get("metadata") or {}
+        parts = metadata.get("parts") or []
+        if parts:
+            title = video.get('title', 'video')
+            filename = f"{title}.mp4".replace('/', '_').replace('\\', '_')
+            response = await stream_concat(short_id)
+            response.headers["Content-Disposition"] = (
+                f"attachment; filename=\"{filename}\""
+            )
+            return response
+
         file_id = video.get('file_id')
         if not file_id:
             raise HTTPException(status_code=404, detail="File not available")
@@ -657,6 +891,7 @@ async def dashboard_page(request: Request, user_id: int):
     """User dashboard with statistics and quick access"""
     from src.user_manager import get_user_stats
     from src.db import get_database, get_user_videos
+    from src.link_shortener import get_or_create_short_link
     
     try:
         # Get user stats
@@ -669,8 +904,27 @@ async def dashboard_page(request: Request, user_id: int):
         # Format videos
         formatted_videos = []
         for video in recent_videos:
+            short_id = video.get('short_id', '')
+            if not short_id:
+                file_id = video.get('file_id')
+                if file_id:
+                    try:
+                        short_id = await get_or_create_short_link(
+                            sb,
+                            file_id,
+                            video.get('id'),
+                            user_id
+                        )
+                    except Exception as short_error:
+                        logger.warning(
+                            "Short link lookup failed for file_id=%s: %s",
+                            file_id,
+                            short_error
+                        )
+                        short_id = file_id or ''
+
             formatted_videos.append({
-                'short_id': video.get('short_id', video.get('file_id')),
+                'short_id': short_id,
                 'title': video.get('title', 'Unknown'),
                 'thumbnail': video.get('thumbnail', ''),
                 'duration': format_duration(video.get('duration', 0)),
@@ -711,11 +965,13 @@ async def search_page(
     sort: str = "latest"
 ):
     """Advanced search page with filters"""
-    from src.db import search_videos
+    from src.db import get_database, search_videos
+    from src.link_shortener import get_or_create_short_link
     
     try:
         if not user_id:
             user_id = DEFAULT_USER_ID
+        sb = await get_database()
         # Search videos with filters
         results = await search_videos(
             user_id=user_id,
@@ -729,8 +985,26 @@ async def search_page(
         
         formatted_results = []
         for video in results:
+            short_id = video.get('short_id', '')
+            if not short_id:
+                file_id = video.get('file_id')
+                if file_id:
+                    try:
+                        short_id = await get_or_create_short_link(
+                            sb,
+                            file_id,
+                            video.get('id'),
+                            user_id
+                        )
+                    except Exception as short_error:
+                        logger.warning(
+                            "Short link lookup failed for file_id=%s: %s",
+                            file_id,
+                            short_error
+                        )
+                        short_id = file_id or ''
             formatted_results.append({
-                'short_id': video.get('short_id', video.get('file_id')),
+                'short_id': short_id,
                 'title': video.get('title', 'Unknown'),
                 'thumbnail': video.get('thumbnail', ''),
                 'duration_formatted': format_duration(video.get('duration', 0)),
@@ -777,14 +1051,34 @@ async def upload_file(
 
         logger.info("Temporary file saved: %s", tmp_path)
 
+        total_duration = 0
+        try:
+            from src.splitter import get_video_duration
+            total_duration = await get_video_duration(tmp_path)
+        except Exception as duration_error:
+            logger.warning(
+                "Duration probe failed for %s: %s",
+                tmp_path,
+                duration_error
+            )
+
         file_size = os.path.getsize(tmp_path)
         if file_size > MAX_WEB_UPLOAD_SIZE:
+            if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+                raise Exception(
+                    "FFmpeg/ffprobe not found. Install FFmpeg and ensure "
+                    "ffmpeg/ffprobe are available in PATH."
+                )
             logger.info(
                 "File exceeds limit (%.1fMB), splitting into parts.",
                 file_size / (1024 * 1024)
             )
             from src.splitter import split_video
-            parts = await split_video(tmp_path, MAX_WEB_UPLOAD_SIZE)
+            parts = await split_video(
+                tmp_path,
+                MAX_WEB_UPLOAD_SIZE,
+                transcode=True
+            )
         else:
             parts = [tmp_path]
 
@@ -835,16 +1129,6 @@ async def upload_file(
                         await asyncio.sleep(2 * attempt)
             raise last_error
 
-        async def send_video(path, caption):
-            with open(path, "rb") as video_file:
-                return await bot.send_video(
-                    chat_id=upload_chat_id,
-                    video=video_file,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    supports_streaming=True
-                )
-
         async def send_document(path, caption):
             with open(path, "rb") as video_file:
                 return await bot.send_document(
@@ -858,79 +1142,30 @@ async def upload_file(
             caption = (
                 f"📤 <b>Web Upload</b>\n📁 {part_label}\n👤 User: {user_id}"
             )
-            try:
-                message = await send_with_retries(
-                    lambda: send_video(path, caption),
-                    "send_video"
-                )
-                if not message.video:
-                    raise Exception("Telegram did not return video metadata")
-                return (
-                    message.video.file_id,
-                    message.video.duration or 0,
-                    message.video.thumbnail.file_id
-                    if message.video.thumbnail else ""
-                )
-            except Exception as upload_error:
-                logger.warning(
-                    "send_video failed for %s: %s",
-                    part_label,
-                    upload_error
-                )
-                message = await send_with_retries(
-                    lambda: send_document(path, caption),
-                    "send_document"
-                )
-                if not message.document:
-                    raise Exception("Telegram upload failed")
+            message = await send_with_retries(
+                lambda: send_document(path, caption),
+                "send_document"
+            )
+            if message.document:
                 return (message.document.file_id, 0, "")
+            if message.video:
+                return (message.video.file_id, message.video.duration or 0, "")
+            logger.error(
+                "send_document returned no document/video for %s: %s",
+                part_label,
+                message.to_dict() if hasattr(message, "to_dict") else message
+            )
+            raise Exception("Telegram upload failed")
 
-        # Save metadata to database
+        # Save metadata to database (single master record)
         from src.db import get_database
         from src.link_shortener import create_short_link
         sb = await get_database()
 
-        async def save_video_entry(file_id, title, duration, thumbnail):
-            video_data = {
-                "file_id": file_id,
-                "title": title,
-                "duration": duration,
-                "thumbnail": thumbnail,
-                "user_id": user_id,
-                "url": None  # No URL for local uploads
-            }
-            video_id = None
-            try:
-                result = await sb.table("videos").insert(video_data).execute()
-                if result.data:
-                    video_id = result.data[0].get("id")
-                else:
-                    logger.warning("Video insert returned no data: %s", result)
-            except Exception as db_error:
-                logger.error("Video metadata insert failed: %s", db_error)
-
-            if video_id is None:
-                try:
-                    lookup = await sb.table("videos").select("id").eq(
-                        "file_id", file_id
-                    ).eq("user_id", user_id).order(
-                        "created_at",
-                        desc=True
-                    ).limit(1).execute()
-                    if lookup.data:
-                        video_id = lookup.data[0].get("id")
-                except Exception as lookup_error:
-                    logger.warning(
-                        "Video lookup after insert failed: %s",
-                        lookup_error
-                    )
-
-            short_id = await create_short_link(sb, file_id, video_id, user_id)
-            return short_id
-
-        short_id = None
-        part_links = []
         total_parts = len(parts)
+        parts_metadata = []
+        master_file_id = None
+        master_thumbnail = ""
 
         for index, part_path in enumerate(parts, start=1):
             if total_parts == 1:
@@ -941,28 +1176,92 @@ async def upload_file(
                     f"{Path(file.filename).suffix}"
                 )
 
-            logger.info(
-                "Uploading %s to Telegram chat_id=%s...",
-                part_title,
-                upload_chat_id
-            )
+            try:
+                part_size = os.path.getsize(part_path)
+                logger.info(
+                    "Uploading %s to Telegram chat_id=%s (%.1fMB)...",
+                    part_title,
+                    upload_chat_id,
+                    part_size / (1024 * 1024)
+                )
+            except OSError:
+                logger.info(
+                    "Uploading %s to Telegram chat_id=%s...",
+                    part_title,
+                    upload_chat_id
+                )
+
             file_id, duration, thumbnail = await upload_part(
                 part_path,
                 part_title
             )
-            part_short_id = await save_video_entry(
-                file_id,
-                part_title,
-                duration,
-                thumbnail
-            )
-            part_links.append({
+
+            if master_file_id is None:
+                master_file_id = file_id
+                master_thumbnail = thumbnail
+
+            total_duration += duration or 0
+            parts_metadata.append({
                 "part": index,
-                "short_id": part_short_id,
-                "file_id": file_id
+                "total": total_parts,
+                "title": part_title,
+                "file_id": file_id,
+                "duration": duration or 0,
+                "type": "video"
             })
-            if short_id is None:
-                short_id = part_short_id
+
+        metadata = None
+        if total_parts > 1:
+            metadata = {
+                "parts": parts_metadata,
+                "part_index": 1,
+                "part_total": total_parts,
+                "is_master": True
+            }
+
+        video_data = {
+            "file_id": master_file_id,
+            "title": file.filename,
+            "duration": total_duration,
+            "thumbnail": master_thumbnail,
+            "user_id": user_id,
+            "url": None
+        }
+        if metadata:
+            video_data["metadata"] = metadata
+
+        video_id = None
+        try:
+            result = await sb.table("videos").insert(video_data).execute()
+            if result.data:
+                video_id = result.data[0].get("id")
+            else:
+                logger.warning("Video insert returned no data: %s", result)
+        except Exception as db_error:
+            logger.error("Video metadata insert failed: %s", db_error)
+
+        if video_id is None and master_file_id:
+            try:
+                lookup = await sb.table("videos").select("id").eq(
+                    "file_id", master_file_id
+                ).eq("user_id", user_id).order(
+                    "created_at",
+                    desc=True
+                ).limit(1).execute()
+                if lookup.data:
+                    video_id = lookup.data[0].get("id")
+            except Exception as lookup_error:
+                logger.warning(
+                    "Video lookup after insert failed: %s",
+                    lookup_error
+                )
+
+        short_id = await create_short_link(
+            sb,
+            master_file_id,
+            video_id,
+            user_id
+        )
 
         logger.info("Upload successful! parts=%s", total_parts)
 
@@ -972,23 +1271,18 @@ async def upload_file(
                 os.unlink(path)
                 logger.info("Temporary file deleted: %s", path)
 
-        message = (
-            "✅ Uploaded to Telegram successfully!"
-            if total_parts == 1
-            else f"✅ Uploaded {total_parts} parts to Telegram successfully!"
-        )
+        message = "✅ Uploaded to Telegram successfully!"
 
         return {
             "success": True,
             "short_id": short_id,
             "filename": file.filename,
-            "file_id": part_links[0]["file_id"] if part_links else None,
-            "parts": part_links,
+            "file_id": master_file_id,
             "message": message
         }
 
     except Exception as e:
-        logger.error("File upload error: %s", e)
+        logger.error("File upload error (%s): %r", type(e).__name__, e)
 
         # Cleanup temporary file on error
         paths_to_cleanup = set()
@@ -1006,9 +1300,10 @@ async def upload_file(
                 except Exception as cleanup_error:
                     logger.error("Failed to cleanup temp file: %s", cleanup_error)
 
+        message = str(e) or "Upload failed due to an unexpected error."
         return {
             "success": False,
-            "message": str(e)
+            "message": message
         }
 
 

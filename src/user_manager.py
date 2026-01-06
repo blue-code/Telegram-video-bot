@@ -202,9 +202,20 @@ async def get_user_stats(db_client, telegram_id: int) -> Optional[dict]:
         
         user = user_result.data[0]
         
-        # Get video count
-        videos_result = await db_client.table("videos").select("id", count="exact").eq("user_id", telegram_id).execute()
-        video_count = videos_result.count if hasattr(videos_result, 'count') else 0
+        # Get video count (exclude split parts)
+        videos_result = await db_client.table("videos").select("id, metadata").eq("user_id", telegram_id).execute()
+        video_count = 0
+        for video in videos_result.data or []:
+            metadata = video.get("metadata") or {}
+            part_index = metadata.get("part_index")
+            if part_index is None:
+                video_count += 1
+                continue
+            try:
+                if int(part_index) <= 1:
+                    video_count += 1
+            except (TypeError, ValueError):
+                video_count += 1
         
         # Get total storage (sum of file sizes)
         storage_result = await db_client.table("videos").select("file_size").eq("user_id", telegram_id).execute()

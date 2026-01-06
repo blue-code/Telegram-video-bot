@@ -10,6 +10,24 @@ VIDEO_TABLE = "videos"
 
 client: AsyncClient = None
 
+def _filter_master_videos(videos: list[dict]) -> list[dict]:
+    """Filter out split part records (keep master or single entries)."""
+    filtered = []
+    for video in videos:
+        metadata = video.get("metadata") or {}
+        part_index = metadata.get("part_index")
+        if part_index is None:
+            filtered.append(video)
+            continue
+        try:
+            part_index_value = int(part_index)
+        except (TypeError, ValueError):
+            filtered.append(video)
+            continue
+        if part_index_value <= 1:
+            filtered.append(video)
+    return filtered
+
 async def get_database() -> AsyncClient:
     """Returns the Supabase async client instance."""
     global client
@@ -72,8 +90,8 @@ async def get_user_videos(user_id: int, filter: str = "all", search: str = "", l
             # Apply search filter if provided
             if search:
                 videos = [v for v in videos if search.lower() in v.get('title', '').lower()]
-            
-            return videos
+
+            return _filter_master_videos(videos)
         return []
     
     # Regular video query
@@ -89,7 +107,8 @@ async def get_user_videos(user_id: int, filter: str = "all", search: str = "", l
     # Apply pagination
     result = await query.range(offset, offset + limit - 1).execute()
     
-    return result.data if result.data else []
+    videos = result.data if result.data else []
+    return _filter_master_videos(videos)
 
 
 async def search_user_videos(user_id: int, keyword: str, limit: int = 10):
@@ -106,7 +125,8 @@ async def search_user_videos(user_id: int, keyword: str, limit: int = 10):
     """
     sb = await get_database()
     result = await sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id).ilike("title", f"%{keyword}%").order("created_at", desc=True).limit(limit).execute()
-    return result.data if result.data else []
+    videos = result.data if result.data else []
+    return _filter_master_videos(videos)
 
 
 async def get_recent_videos(user_id: int, limit: int = 5):
@@ -122,7 +142,8 @@ async def get_recent_videos(user_id: int, limit: int = 5):
     """
     sb = await get_database()
     result = await sb.table(VIDEO_TABLE).select("*").eq("user_id", user_id).order("created_at", desc=True).limit(limit).execute()
-    return result.data if result.data else []
+    videos = result.data if result.data else []
+    return _filter_master_videos(videos)
 
 
 async def add_favorite(user_id: int, video_id: int):
@@ -202,8 +223,8 @@ async def get_user_favorites(user_id: int, limit: int = 10, offset: int = 0):
     result = await sb.table("favorites").select("video_id, videos(*)").eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
     
     if result.data:
-        # Extract video data from join
-        return [item.get("videos") for item in result.data if item.get("videos")]
+        videos = [item.get("videos") for item in result.data if item.get("videos")]
+        return _filter_master_videos(videos)
     return []
 
 
@@ -275,7 +296,8 @@ async def get_popular_videos(limit: int = 10):
     """
     sb = await get_database()
     result = await sb.table(VIDEO_TABLE).select("*").order("views", desc=True).limit(limit).execute()
-    return result.data if result.data else []
+    videos = result.data if result.data else []
+    return _filter_master_videos(videos)
 
 
 async def get_video_count(user_id: int = None, filter: str = "all"):
@@ -488,7 +510,8 @@ async def search_videos(
     q = q.limit(limit)
     result = await q.execute()
     
-    return result.data if result.data else []
+    videos = result.data if result.data else []
+    return _filter_master_videos(videos)
 
 
 async def update_video_metadata(
