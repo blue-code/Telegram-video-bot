@@ -130,6 +130,7 @@
             border-radius: 12px;
             overflow: hidden;
             cursor: pointer;
+            position: relative;
             transition: all 0.3s;
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
         }
@@ -173,6 +174,29 @@
             border-radius: 4px;
             font-size: 12px;
             font-weight: 600;
+        }
+
+        .delete-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            border: none;
+            background: rgba(0, 0, 0, 0.7);
+            color: #fff;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+
+        .delete-btn:hover {
+            transform: scale(1.05);
+            background: rgba(220, 53, 69, 0.9);
         }
 
         .video-info {
@@ -285,7 +309,8 @@
 
     <script>
         // Pass videos from server
-        const allVideos = {{ videos_json|safe }};
+        let allVideos = {{ videos_json|safe }};
+        const userId = {{ user_id }};
         let currentFilter = 'all';
         let currentSearch = '';
 
@@ -343,6 +368,7 @@
             emptyState.classList.remove('active');
             
             grid.innerHTML = videos.map(video => createVideoCard(video)).join('');
+            attachDeleteHandlers();
 
             // Add click handlers
             document.querySelectorAll('.video-card').forEach(card => {
@@ -357,6 +383,9 @@
             const thumbnailHtml = video.thumbnail 
                 ? `<img src="${video.thumbnail}" alt="${video.title}">`
                 : `<div class="thumbnail-placeholder">🎬</div>`;
+            const deleteButton = video.id
+                ? `<button class="delete-btn" data-video-id="${video.id}" title="Delete">🗑️</button>`
+                : '';
 
             return `
                 <div class="video-card" data-short-id="${video.short_id}">
@@ -364,6 +393,7 @@
                         ${thumbnailHtml}
                         <div class="duration-badge">${video.duration_formatted}</div>
                     </div>
+                    ${deleteButton}
                     <div class="video-info">
                         <div class="video-title">${escapeHtml(video.title)}</div>
                         <div class="video-meta">
@@ -385,6 +415,38 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function attachDeleteHandlers() {
+            document.querySelectorAll('.delete-btn').forEach(button => {
+                button.addEventListener('click', async (event) => {
+                    event.stopPropagation();
+                    const videoId = button.dataset.videoId;
+                    if (!videoId) {
+                        return;
+                    }
+                    if (!confirm('이 영상을 삭제할까요?')) {
+                        return;
+                    }
+                    button.disabled = true;
+                    try {
+                        const response = await fetch(
+                            `/api/videos/${videoId}?user_id=${userId}`,
+                            { method: 'DELETE' }
+                        );
+                        const result = await response.json();
+                        if (!result.success) {
+                            throw new Error(result.message || '삭제에 실패했습니다.');
+                        }
+                        allVideos = allVideos.filter(video => `${video.id}` !== `${videoId}`);
+                        filterAndRender();
+                    } catch (error) {
+                        alert(error.message || '삭제 중 오류가 발생했습니다.');
+                    } finally {
+                        button.disabled = false;
+                    }
+                });
+            });
         }
     </script>
     <script>

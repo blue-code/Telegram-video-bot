@@ -4,6 +4,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import asyncio
+import mimetypes
 import os
 import httpx
 import logging
@@ -11,6 +12,7 @@ import json
 import subprocess
 import tempfile
 import shutil
+from urllib.parse import quote
 from datetime import datetime
 from dotenv import load_dotenv
 from typing import Optional
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TVB API", version="1.0.0")
 DEFAULT_USER_ID = 41509535
+SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 MAX_WEB_UPLOAD_SIZE = 15 * 1024 * 1024  # 15MB to stay under Telegram getFile limit.
 
 # Add CORS middleware
@@ -106,6 +109,15 @@ def format_date(date_str):
     except Exception as e:
         logger.error(f"Error formatting date: {e}")
         return "Unknown"
+
+
+def build_thumbnail_url(thumbnail: str) -> str:
+    """Normalize thumbnail to a usable URL."""
+    if not thumbnail:
+        return ""
+    if thumbnail.startswith(("http://", "https://", "/")):
+        return thumbnail
+    return f"/thumb/{quote(thumbnail, safe='')}"
 
 
 # Mock DB or Bot interaction for now
@@ -262,6 +274,31 @@ async def stream_video(file_id: str):
         
     except Exception as e:
         logging.error("Streaming error (%s): %r", type(e).__name__, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/thumb/{file_id}")
+async def stream_thumbnail(file_id: str):
+    """Proxy stream for thumbnail images stored on Telegram."""
+    try:
+        download_url = await get_file_path_from_telegram(file_id)
+        content_type = mimetypes.guess_type(download_url)[0] or "image/jpeg"
+
+        async def iter_file():
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(60.0, read=300.0),
+                follow_redirects=True
+            ) as client:
+                async with client.stream("GET", download_url) as r:
+                    r.raise_for_status()
+                    async for chunk in r.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(iter_file(), media_type=content_type)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error("Thumbnail stream error (%s): %r", type(e).__name__, e)
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -457,9 +494,10 @@ async def gallery_page(request: Request, user_id: int):
                         short_id = file_id or ''
             
             formatted_videos.append({
+                'id': video.get('id'),
                 'short_id': short_id,
                 'title': video.get('title', 'Unknown'),
-                'thumbnail': video.get('thumbnail', ''),
+                'thumbnail': build_thumbnail_url(video.get('thumbnail', '')),
                 'duration_formatted': format_duration(video.get('duration', 0)),
                 'views': video.get('views', 0),
                 'date': format_date(video.get('created_at'))
@@ -949,9 +987,10 @@ async def dashboard_page(request: Request, user_id: int):
                         short_id = file_id or ''
 
             formatted_videos.append({
+                'id': video.get('id'),
                 'short_id': short_id,
                 'title': video.get('title', 'Unknown'),
-                'thumbnail': video.get('thumbnail', ''),
+                'thumbnail': build_thumbnail_url(video.get('thumbnail', '')),
                 'duration': format_duration(video.get('duration', 0)),
                 'views': video.get('views', 0),
                 'date': format_date(video.get('created_at'))
@@ -1029,9 +1068,10 @@ async def search_page(
                         )
                         short_id = file_id or ''
             formatted_results.append({
+                'id': video.get('id'),
                 'short_id': short_id,
                 'title': video.get('title', 'Unknown'),
-                'thumbnail': video.get('thumbnail', ''),
+                'thumbnail': build_thumbnail_url(video.get('thumbnail', '')),
                 'duration_formatted': format_duration(video.get('duration', 0)),
                 'views': video.get('views', 0),
                 'date': format_date(video.get('created_at'))
@@ -1154,6 +1194,77 @@ async def upload_file(
                         await asyncio.sleep(2 * attempt)
             raise last_error
 
+        async def create_thumbnail_file(source_path: str, duration_hint: float) -> str:
+            if not shutil.which("ffmpeg"):
+                return ""
+
+            if duration_hint and duration_hint > 2:
+                thumb_time = min(max(duration_hint * 0.1, 1), duration_hint - 1)
+            else:
+                thumb_time = 1
+
+            tmp_thumb = tempfile.NamedTemporaryFile(
+                delete=False,
+                suffix=".jpg"
+            )
+            tmp_thumb.close()
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                "-ss", str(thumb_time),
+                "-i", source_path,
+                "-frames:v", "1",
+                "-q:v", "2",
+                tmp_thumb.name
+            ]
+
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                returncode = process.returncode
+            except NotImplementedError:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout = result.stdout
+                stderr = result.stderr
+                returncode = result.returncode
+
+            if returncode != 0:
+                error_msg = stderr.decode(errors="replace")
+                logger.warning("Thumbnail generation failed: %s", error_msg)
+                try:
+                    os.unlink(tmp_thumb.name)
+                except OSError:
+                    pass
+                return ""
+
+            return tmp_thumb.name
+
+        async def upload_thumbnail(path: str) -> str:
+            if not path:
+                return ""
+            with open(path, "rb") as image_file:
+                message = await send_with_retries(
+                    lambda: bot.send_photo(
+                        chat_id=upload_chat_id,
+                        photo=image_file,
+                        caption="🖼️ Thumbnail"
+                    ),
+                    "send_photo"
+                )
+            if message.photo:
+                return message.photo[-1].file_id
+            return ""
+
         async def send_document(path, caption):
             with open(path, "rb") as video_file:
                 return await bot.send_document(
@@ -1191,6 +1302,17 @@ async def upload_file(
         parts_metadata = []
         master_file_id = None
         master_thumbnail = ""
+        thumbnail_temp_path = ""
+
+        try:
+            thumbnail_temp_path = await create_thumbnail_file(
+                tmp_path,
+                total_duration
+            )
+            if thumbnail_temp_path:
+                master_thumbnail = await upload_thumbnail(thumbnail_temp_path)
+        except Exception as thumb_error:
+            logger.warning("Thumbnail upload failed: %s", thumb_error)
 
         for index, part_path in enumerate(parts, start=1):
             if total_parts == 1:
@@ -1223,7 +1345,8 @@ async def upload_file(
 
             if master_file_id is None:
                 master_file_id = file_id
-                master_thumbnail = thumbnail
+                if not master_thumbnail and thumbnail:
+                    master_thumbnail = thumbnail
 
             total_duration += duration or 0
             parts_metadata.append({
@@ -1291,7 +1414,10 @@ async def upload_file(
         logger.info("Upload successful! parts=%s", total_parts)
 
         # Delete temporary file(s) immediately
-        for path in set(parts + [tmp_path]):
+        cleanup_paths = set(parts + [tmp_path])
+        if thumbnail_temp_path:
+            cleanup_paths.add(thumbnail_temp_path)
+        for path in cleanup_paths:
             if path and os.path.exists(path):
                 os.unlink(path)
                 logger.info("Temporary file deleted: %s", path)
@@ -1313,6 +1439,8 @@ async def upload_file(
         paths_to_cleanup = set()
         if tmp_path:
             paths_to_cleanup.add(tmp_path)
+        if locals().get("thumbnail_temp_path"):
+            paths_to_cleanup.add(locals().get("thumbnail_temp_path"))
         for path in locals().get("parts", []):
             if path:
                 paths_to_cleanup.add(path)
@@ -1343,12 +1471,14 @@ async def edit_page(request: Request, video_id: int, user_id: Optional[int] = No
             user_id = DEFAULT_USER_ID
         video = await get_video_by_id(video_id)
         
-        if not video or video.get('user_id') != user_id:
+        if not video or (video.get('user_id') != user_id and user_id != SUPER_ADMIN_ID):
             return templates.TemplateResponse("error.html", {
                 "request": request,
                 "error_code": 403,
                 "error_message": "Access denied"
             })
+
+        video["thumbnail"] = build_thumbnail_url(video.get("thumbnail", ""))
         
         return templates.TemplateResponse("edit.html", {
             "request": request,

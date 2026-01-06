@@ -268,8 +268,17 @@ async def delete_video(video_id: int, user_id: int):
     """
     try:
         sb = await get_database()
-        await sb.table(VIDEO_TABLE).delete().eq("id", video_id).eq("user_id", user_id).execute()
-        return True
+        query = sb.table(VIDEO_TABLE).delete().eq("id", video_id)
+        if not _is_super_admin(user_id):
+            query = query.eq("user_id", user_id)
+        result = await query.execute()
+        deleted = bool(result.data)
+        if deleted:
+            try:
+                await sb.table("shared_links").delete().eq("video_id", video_id).execute()
+            except Exception:
+                pass
+        return deleted
     except Exception:
         return False
 
