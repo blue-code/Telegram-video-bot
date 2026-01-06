@@ -710,12 +710,15 @@ async def delete_video(
     from src.db import delete_video_by_id
     
     try:
-        success = await delete_video_by_id(video_id, user_id)
+        success, message = await delete_video_by_id(video_id, user_id)
         
         if success:
-            return {"success": True, "message": "Video deleted"}
+            return {"success": True, "message": message}
         else:
-            raise HTTPException(status_code=404, detail="Video not found or unauthorized")
+            status_code = 404
+            if message and "conflict" in message.lower():
+                status_code = 409
+            raise HTTPException(status_code=status_code, detail=message or "Delete failed")
     except HTTPException:
         raise
     except Exception as e:

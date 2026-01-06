@@ -264,23 +264,52 @@ async def delete_video(video_id: int, user_id: int):
         user_id: Telegram user ID
         
     Returns:
-        True if deleted, False otherwise
+        Tuple (success, message)
     """
     try:
         sb = await get_database()
+
+        lookup = sb.table(VIDEO_TABLE).select("id")
+        if not _is_super_admin(user_id):
+            lookup = lookup.eq("user_id", user_id)
+        lookup = lookup.eq("id", video_id)
+        existing = await lookup.execute()
+        if not existing.data:
+            return False, "Video not found or unauthorized"
+
+        short_ids = []
+        try:
+            links = await sb.table("shared_links").select("short_id").eq("video_id", video_id).execute()
+            short_ids = [item.get("short_id") for item in (links.data or []) if item.get("short_id")]
+        except Exception:
+            short_ids = []
+
+        if short_ids:
+            try:
+                await sb.table("views").delete().in_("short_id", short_ids).execute()
+            except Exception:
+                pass
+
+        try:
+            await sb.table("favorites").delete().eq("video_id", video_id).execute()
+        except Exception:
+            pass
+
+        try:
+            await sb.table("shared_links").delete().eq("video_id", video_id).execute()
+        except Exception:
+            pass
+
         query = sb.table(VIDEO_TABLE).delete().eq("id", video_id)
         if not _is_super_admin(user_id):
             query = query.eq("user_id", user_id)
         result = await query.execute()
         deleted = bool(result.data)
-        if deleted:
-            try:
-                await sb.table("shared_links").delete().eq("video_id", video_id).execute()
-            except Exception:
-                pass
-        return deleted
-    except Exception:
-        return False
+        if not deleted:
+            return False, "Delete failed"
+        return True, "Video deleted"
+    except Exception as error:
+        return False, str(error)
 
 
 async def increment_view_count(video_id: int):
@@ -466,7 +495,7 @@ async def delete_video_by_id(video_id: int, user_id: int):
         user_id: Telegram user ID
         
     Returns:
-        True if deleted, False otherwise
+        Tuple (success, message)
     """
     return await delete_video(video_id, user_id)
 

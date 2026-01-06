@@ -435,8 +435,10 @@
                             { method: 'DELETE' }
                         );
                         const result = await response.json();
-                        if (!result.success) {
-                            throw new Error(result.message || '삭제에 실패했습니다.');
+                        if (!response.ok || !result.success) {
+                            throw new Error(
+                                result.message || result.detail || '삭제에 실패했습니다.'
+                            );
                         }
                         allVideos = allVideos.filter(video => `${video.id}` !== `${videoId}`);
                         filterAndRender();
