@@ -35,6 +35,10 @@ MAX_FILE_SIZE = 30 * 1024 * 1024 # 30MB (Safety buffer for 50MB limit)
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0"))
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Log uncaught exceptions from the Telegram polling loop."""
+    logging.error("Unhandled exception in bot: %r", context.error, exc_info=context.error)
+
 def get_progress_bar(percentage):
     """Generates a simple text progress bar."""
     completed = int(percentage / 10)
@@ -1138,6 +1142,7 @@ def main():
     # Message and callback handlers
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_error_handler(error_handler)
     
     # Run the bot
     logging.info("Starting TVB Bot... 🚀")
