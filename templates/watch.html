@@ -360,7 +360,8 @@
         // Configuration constants
         const BUFFER_LOW_THRESHOLD = 5; // seconds
         const BUFFERING_INDICATOR_DELAY = 1000; // milliseconds
-        
+        const PREFETCH_THRESHOLD = 10; // seconds - start prefetching when buffer < 10s
+
         const video = document.getElementById('video-player');
         const loadingSpinner = document.getElementById('loading-spinner');
         const bufferingIndicator = document.getElementById('buffering-indicator');
@@ -385,6 +386,7 @@
         let concatFailed = false;
         let usePartsPlayback = playlistTotal <= 1;
         let bufferingTimeout = null;
+        let prefetchedParts = new Set(); // Track prefetched parts
 
         function updatePartMeta() {
             if (playlistTotal <= 1 || !usePartsPlayback) {
@@ -395,6 +397,40 @@
             const part = current?.part || currentIndex + 1;
             partMeta.style.display = 'flex';
             partLabel.textContent = `Part ${part} / ${playlistTotal}`;
+        }
+
+        function prefetchNextPart(partIndex) {
+            // Prefetch next part to browser cache for seamless playback
+            if (partIndex >= playlist.length || prefetchedParts.has(partIndex)) {
+                return; // Already prefetched or no next part
+            }
+
+            const nextPart = playlist[partIndex];
+            if (!nextPart || !nextPart.file_id) {
+                return;
+            }
+
+            const prefetchUrl = `/stream/${nextPart.file_id}`;
+
+            // Method 1: Use link rel="prefetch" (browser-native, efficient)
+            const link = document.createElement('link');
+            link.rel = 'prefetch';
+            link.as = 'video';
+            link.href = prefetchUrl;
+            document.head.appendChild(link);
+
+            // Method 2: Fetch initial bytes to warm up connection
+            fetch(prefetchUrl, {
+                method: 'GET',
+                headers: { 'Range': 'bytes=0-524287' } // Prefetch first 512KB
+            }).then(response => {
+                if (response.ok) {
+                    console.log(`Prefetched part ${partIndex + 1}: ${prefetchUrl}`);
+                    prefetchedParts.add(partIndex);
+                }
+            }).catch(err => {
+                console.warn(`Prefetch failed for part ${partIndex + 1}:`, err);
+            });
         }
 
         function loadPart(index) {
@@ -410,6 +446,11 @@
             video.load();
             video.play().catch(() => {});
             updatePartMeta();
+
+            // Proactively prefetch next part when loading current part
+            if (currentIndex + 1 < playlist.length) {
+                prefetchNextPart(currentIndex + 1);
+            }
         }
         
         if (playlistTotal > 1) {
@@ -466,16 +507,30 @@
             loadingSpinner.classList.remove('active');
         });
 
-        // Monitor buffer health
+        // Monitor buffer health and prefetch next part
         video.addEventListener('progress', () => {
-            if (video.buffered.length > 0) {
+            if (video.buffered.length > 0 && usePartsPlayback) {
                 const bufferedEnd = video.buffered.end(video.buffered.length - 1);
                 const currentTime = video.currentTime;
                 const bufferedAhead = bufferedEnd - currentTime;
-                
-                // Low buffer warning (could be used for preloading next part)
-                if (bufferedAhead < BUFFER_LOW_THRESHOLD && usePartsPlayback && currentIndex + 1 < playlist.length) {
-                    // Could trigger prefetch of next part here in future
+
+                // Prefetch next part when buffer is running low
+                if (bufferedAhead < PREFETCH_THRESHOLD && currentIndex + 1 < playlist.length) {
+                    prefetchNextPart(currentIndex + 1);
+                }
+            }
+        });
+
+        // Also prefetch on timeupdate for better responsiveness
+        video.addEventListener('timeupdate', () => {
+            if (usePartsPlayback && currentIndex + 1 < playlist.length) {
+                const duration = video.duration;
+                const currentTime = video.currentTime;
+                const timeRemaining = duration - currentTime;
+
+                // Prefetch when approaching end of current part (< 15 seconds left)
+                if (timeRemaining < 15 && timeRemaining > 0) {
+                    prefetchNextPart(currentIndex + 1);
                 }
             }
         });

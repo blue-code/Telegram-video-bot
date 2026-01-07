@@ -50,20 +50,70 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # Format: {file_id: {"url": str, "size": int, "timestamp": float}}
 file_info_cache = {}
 CACHE_TTL = 3600  # 1 hour cache TTL
+MAX_CACHE_SIZE = 1000  # Maximum number of cached entries
+
+# Progress tracking for downloads
+# Format: {task_id: {"status": str, "progress": float, "title": str, "error": str}}
+download_progress = {}
+
+# Adaptive chunk size constants
+CHUNK_SIZE_SMALL = 32768    # 32KB - for slow networks, initial buffering
+CHUNK_SIZE_MEDIUM = 65536   # 64KB - default balanced size
+CHUNK_SIZE_LARGE = 131072   # 128KB - for fast networks
+CHUNK_SIZE_XLARGE = 262144  # 256KB - for very fast networks
 
 
 # Utility Functions
+def clean_cache_if_needed():
+    """Remove oldest cache entries if cache size exceeds limit"""
+    if len(file_info_cache) > MAX_CACHE_SIZE:
+        # Sort by timestamp and keep only the most recent MAX_CACHE_SIZE entries
+        sorted_items = sorted(
+            file_info_cache.items(),
+            key=lambda x: x[1].get("timestamp", 0),
+            reverse=True
+        )
+        file_info_cache.clear()
+        file_info_cache.update(dict(sorted_items[:MAX_CACHE_SIZE]))
+        logger.info(f"Cache cleaned: {len(file_info_cache)} entries remaining")
+
+
+def get_adaptive_chunk_size(connection_speed: Optional[str] = None) -> int:
+    """
+    Determine optimal chunk size based on connection speed hint.
+
+    Args:
+        connection_speed: Client hint for connection quality
+                         ("slow-2g", "2g", "3g", "4g", None)
+
+    Returns:
+        Optimal chunk size in bytes
+    """
+    if not connection_speed:
+        return CHUNK_SIZE_MEDIUM  # Default balanced size
+
+    speed = connection_speed.lower()
+    if speed in ("slow-2g", "2g"):
+        return CHUNK_SIZE_SMALL   # 32KB for slow connections
+    elif speed == "3g":
+        return CHUNK_SIZE_MEDIUM  # 64KB for moderate connections
+    elif speed in ("4g", "5g"):
+        return CHUNK_SIZE_LARGE   # 128KB for fast connections
+    else:
+        return CHUNK_SIZE_MEDIUM  # Default
+
+
 def format_duration(seconds):
     """Format duration in seconds to HH:MM:SS or MM:SS"""
     if not seconds:
         return "00:00"
-    
+
     try:
         seconds = int(seconds)
         hours = seconds // 3600
         minutes = (seconds % 3600) // 60
         secs = seconds % 60
-        
+
         if hours > 0:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         return f"{minutes:02d}:{secs:02d}"
@@ -183,7 +233,10 @@ async def get_file_info_cached(file_id: str) -> Tuple[str, Optional[int]]:
             "timestamp": now
         }
         logger.debug(f"Cache updated for file_id={file_id}")
-        
+
+        # Clean cache if needed
+        clean_cache_if_needed()
+
         return download_url, file_size
 
 
@@ -332,28 +385,38 @@ async def watch_video(request: Request, short_id: str):
 async def stream_video(
     file_id: str,
     range: Optional[str] = Header(None),
-    if_none_match: Optional[str] = Header(None)
+    if_none_match: Optional[str] = Header(None),
+    request: Request = None
 ):
     """
     Proxy stream from Telegram to Browser with Range request support.
     Supports HTTP Range requests for video seeking.
+    Features adaptive chunk sizing based on network conditions.
     """
     try:
         # Get file info (URL and size) with caching
         download_url, file_size = await get_file_info_cached(file_id)
-        
+
         # Generate ETag for caching
         etag = generate_etag(file_id)
-        
+
         # Check If-None-Match for 304 Not Modified
         if if_none_match and if_none_match == etag:
             return Response(status_code=304)
-        
+
+        # Determine optimal chunk size based on client hints
+        connection_speed = None
+        if request and request.headers:
+            # Try to get ECT (Effective Connection Type) from client hints
+            connection_speed = request.headers.get("ect") or request.headers.get("downlink")
+        chunk_size = get_adaptive_chunk_size(connection_speed)
+        logger.debug(f"Using chunk size: {chunk_size} bytes (connection: {connection_speed or 'unknown'})")
+
         # Parse Range header
         range_tuple = None
         if range and file_size:
             range_tuple = parse_range_header(range, file_size)
-        
+
         # Prepare headers
         headers = {
             "Accept-Ranges": "bytes",
@@ -381,7 +444,7 @@ async def stream_video(
                     range_headers = {"Range": f"bytes={start}-{end}"}
                     async with client.stream("GET", download_url, headers=range_headers) as r:
                         r.raise_for_status()
-                        async for chunk in r.aiter_bytes(chunk_size=65536):
+                        async for chunk in r.aiter_bytes(chunk_size=chunk_size):
                             yield chunk
             
             return StreamingResponse(
@@ -394,7 +457,7 @@ async def stream_video(
         # Full file request (no Range header)
         if file_size:
             headers["Content-Length"] = str(file_size)
-        
+
         async def iter_file():
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(60.0, read=600.0),
@@ -402,7 +465,7 @@ async def stream_video(
             ) as client:
                 async with client.stream("GET", download_url) as r:
                     r.raise_for_status()
-                    async for chunk in r.aiter_bytes(chunk_size=65536):
+                    async for chunk in r.aiter_bytes(chunk_size=chunk_size):
                         yield chunk
         
         return StreamingResponse(
@@ -675,6 +738,91 @@ async def gallery_default_page(request: Request):
     return await gallery_page(request, DEFAULT_USER_ID)
 
 
+@app.get("/favorites/{user_id}", response_class=HTMLResponse)
+async def favorites_page(request: Request, user_id: int):
+    """Favorites page showing user's favorite videos"""
+    from src.db import get_user_favorites
+    from src.link_shortener import get_or_create_short_link, get_database
+
+    try:
+        videos = await get_user_favorites(user_id, limit=100)
+
+        # Add short links for each video
+        db = await get_database()
+        for video in videos:
+            if video.get('file_id'):
+                short_id = await get_or_create_short_link(
+                    db,
+                    video['file_id'],
+                    video.get('id'),
+                    user_id
+                )
+                video['short_id'] = short_id
+
+        return templates.TemplateResponse("favorites.html", {
+            "request": request,
+            "user_id": user_id,
+            "videos": videos
+        })
+    except Exception as e:
+        logger.error(f"Error loading favorites: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error": str(e)
+        })
+
+
+@app.get("/favorites", response_class=HTMLResponse)
+async def favorites_default_page(request: Request):
+    """Default favorites page using fallback user_id"""
+    return await favorites_page(request, DEFAULT_USER_ID)
+
+
+@app.get("/queue/{user_id}", response_class=HTMLResponse)
+async def queue_page(request: Request, user_id: int):
+    """Queue management page"""
+    return templates.TemplateResponse("queue.html", {
+        "request": request,
+        "user_id": user_id
+    })
+
+
+@app.get("/queue", response_class=HTMLResponse)
+async def queue_default_page(request: Request):
+    """Default queue page using fallback user_id"""
+    return await queue_page(request, DEFAULT_USER_ID)
+
+
+@app.get("/api/queue/status")
+async def get_queue_status():
+    """Get current download queue status"""
+    try:
+        # Get all active downloads from download_progress
+        active_downloads = []
+
+        for task_id, progress_data in download_progress.items():
+            if progress_data.get('status') in ['downloading', 'queued']:
+                active_downloads.append({
+                    'task_id': task_id,
+                    'status': progress_data.get('status', 'unknown'),
+                    'progress': progress_data.get('progress', 0),
+                    'title': progress_data.get('title', 'Unknown'),
+                    'error': progress_data.get('error')
+                })
+
+        return {
+            "success": True,
+            "active_downloads": active_downloads,
+            "count": len(active_downloads)
+        }
+    except Exception as e:
+        logger.error(f"Error getting queue status: {e}")
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+
 # REST API Endpoints
 
 # Video increment view
@@ -945,6 +1093,134 @@ async def download_page(request: Request, user_id: Optional[int] = None):
     })
 
 
+@app.post("/api/extract-info")
+async def extract_video_info_api(url: str = Body(...)):
+    """Extract video/playlist information from URL"""
+    try:
+        from src.downloader import extract_video_info
+
+        info = await extract_video_info(url)
+
+        if info.get('is_playlist'):
+            return {
+                "success": True,
+                "is_playlist": True,
+                "playlist_id": info.get('id'),
+                "title": info.get('title'),
+                "count": info.get('count'),
+                "entries": [
+                    {
+                        "id": entry.get('id'),
+                        "title": entry.get('title'),
+                        "duration": entry.get('duration'),
+                        "url": entry.get('url')
+                    }
+                    for entry in info.get('entries', [])
+                ]
+            }
+        else:
+            return {
+                "success": True,
+                "is_playlist": False,
+                "id": info.get('id'),
+                "title": info.get('title'),
+                "duration": info.get('duration'),
+                "thumbnail": info.get('thumbnail')
+            }
+    except Exception as e:
+        logger.error(f"Error extracting video info: {e}")
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+
+@app.post("/api/favorites/toggle")
+async def toggle_favorite(
+    video_id: int = Body(...),
+    user_id: int = Body(...)
+):
+    """Toggle favorite status for a video"""
+    try:
+        from src.db import is_favorite, add_favorite, remove_favorite
+
+        # Check current status
+        is_fav = await is_favorite(user_id, video_id)
+
+        if is_fav:
+            # Remove from favorites
+            success = await remove_favorite(user_id, video_id)
+            return {
+                "success": success,
+                "is_favorite": False,
+                "message": "Removed from favorites"
+            }
+        else:
+            # Add to favorites
+            success = await add_favorite(user_id, video_id)
+            return {
+                "success": success,
+                "is_favorite": True,
+                "message": "Added to favorites"
+            }
+    except Exception as e:
+        logger.error(f"Error toggling favorite: {e}")
+        return {
+            "success": False,
+            "message": str(e)
+        }
+
+
+@app.get("/stream/progress/{task_id}")
+async def stream_progress(task_id: str):
+    """
+    Server-Sent Events endpoint for real-time download progress.
+    """
+    async def event_generator():
+        try:
+            while True:
+                # Get progress from global dict
+                progress_data = download_progress.get(task_id)
+
+                if not progress_data:
+                    yield f"data: {json.dumps({'error': 'Task not found'})}\n\n"
+                    await asyncio.sleep(1)
+                    continue
+
+                # Send current progress
+                data = {
+                    "task_id": task_id,
+                    "status": progress_data.get("status", "downloading"),
+                    "progress": progress_data.get("progress", 0),
+                    "title": progress_data.get("title", "Unknown"),
+                    "error": progress_data.get("error")
+                }
+
+                yield f"data: {json.dumps(data)}\n\n"
+
+                # Stop streaming if task completed or failed
+                if progress_data.get("status") in ["completed", "failed", "cancelled"]:
+                    break
+
+                # Wait before next update
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            logger.info(f"SSE connection closed for task {task_id}")
+        except Exception as e:
+            logger.error(f"Error in SSE stream: {e}")
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
 @app.post("/api/web-download")
 async def web_download(
     url: str = Body(...),
@@ -956,16 +1232,40 @@ async def web_download(
         user_id = DEFAULT_USER_ID
     downloaded_file = None
     temp_dir = None
-    
+
+    # Generate task ID
+    import uuid
+    task_id = str(uuid.uuid4())
+
+    # Initialize progress tracking
+    download_progress[task_id] = {
+        "status": "downloading",
+        "progress": 0,
+        "title": "Preparing...",
+        "error": None
+    }
+
     try:
-        logger.info(f"Starting web download: {url}")
-        
+        logger.info(f"Starting web download: {url} (task_id: {task_id})")
+
+        # Progress hook for yt-dlp
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                try:
+                    total = d.get('total_bytes') or d.get('total_bytes_estimate') or 1
+                    downloaded = d.get('downloaded_bytes', 0)
+                    progress = (downloaded / total) * 100
+                    download_progress[task_id]['progress'] = min(progress, 99)
+                    download_progress[task_id]['title'] = d.get('filename', 'Downloading...')
+                except Exception as e:
+                    logger.error(f"Progress hook error: {e}")
+
         # Download video using yt-dlp to temporary directory
         import yt_dlp
-        
+
         temp_dir = tempfile.mkdtemp()
         output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
-        
+
         is_audio = str(quality).lower() in {"audio", "bestaudio"}
         if is_audio:
             format_spec = "bestaudio"
@@ -979,6 +1279,7 @@ async def web_download(
             'outtmpl': output_template,
             'quiet': False,
             'no_warnings': False,
+            'progress_hooks': [progress_hook],
         }
         
         if is_audio:
@@ -1248,6 +1549,11 @@ async def web_download(
 
             logger.info("Upload successful! file_id: %s", master_file_id)
 
+            # Update progress to completed
+            download_progress[task_id]['status'] = 'completed'
+            download_progress[task_id]['progress'] = 100
+            download_progress[task_id]['title'] = title
+
             if downloaded_file and os.path.exists(downloaded_file):
                 os.unlink(downloaded_file)
             if temp_dir and os.path.exists(temp_dir):
@@ -1266,6 +1572,7 @@ async def web_download(
 
             return {
                 "success": True,
+                "task_id": task_id,
                 "short_id": short_id,
                 "title": title,
                 "message": "✅ Download and upload complete!"
@@ -1341,9 +1648,15 @@ async def web_download(
             }).execute()
         
         logger.info(f"Video metadata saved: video_id={video_id}, short_id={short_id}")
-        
+
+        # Update progress to completed
+        download_progress[task_id]['status'] = 'completed'
+        download_progress[task_id]['progress'] = 100
+        download_progress[task_id]['title'] = title
+
         return {
             "success": True,
+            "task_id": task_id,
             "short_id": short_id,
             "title": title,
             "message": "✅ Download and upload complete!"
@@ -1351,7 +1664,11 @@ async def web_download(
         
     except Exception as e:
         logger.error(f"Web download error: {e}")
-        
+
+        # Update progress to failed
+        download_progress[task_id]['status'] = 'failed'
+        download_progress[task_id]['error'] = str(e)
+
         # Cleanup on error
         if downloaded_file and os.path.exists(downloaded_file):
             try:
@@ -1363,9 +1680,10 @@ async def web_download(
                 shutil.rmtree(temp_dir)
             except:
                 pass
-        
+
         return {
             "success": False,
+            "task_id": task_id,
             "message": f"Download failed: {str(e)}"
         }
 
