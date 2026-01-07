@@ -382,6 +382,9 @@
         </div>
     </div>
 
+    <!-- PWA Install Prompt -->
+    <script src="/static/pwa-install.js"></script>
+
     <script>
         // Pass videos from server
         let allVideos = {{ videos_json|safe }};
@@ -586,6 +589,9 @@
             });
         }
     </script>
+    <!-- PWA Install Prompt -->
+    <script src="/static/pwa-install.js"></script>
+
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');

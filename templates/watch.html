@@ -772,9 +772,119 @@
                 toast.classList.remove('active');
             }, 3000);
         }
+
+        // Touch gesture controls for mobile
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let touchStartTime = 0;
+        let isSeeking = false;
+
+        video.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+                touchStartTime = video.currentTime;
+                isSeeking = false;
+            }
+        }, { passive: true });
+
+        video.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 1 && !isSeeking) {
+                const touchX = e.touches[0].clientX;
+                const deltaX = touchX - touchStartX;
+
+                // Horizontal swipe for seeking (> 50px movement)
+                if (Math.abs(deltaX) > 50) {
+                    isSeeking = true;
+                    const seekAmount = deltaX / 10; // 10px = 1 second
+                    video.currentTime = Math.max(0, Math.min(video.duration, touchStartTime + seekAmount));
+
+                    // Show seek preview
+                    const seekDirection = deltaX > 0 ? 'Forward' : 'Backward';
+                    showToast(`${seekDirection} ${Math.abs(seekAmount).toFixed(0)}s`);
+                }
+            }
+        }, { passive: true });
+
+        // Double tap to seek
+        let lastTap = 0;
+        video.addEventListener('touchend', (e) => {
+            const currentTime = new Date().getTime();
+            const tapLength = currentTime - lastTap;
+
+            if (tapLength < 300 && tapLength > 0) {
+                // Double tap detected
+                const rect = video.getBoundingClientRect();
+                const tapX = e.changedTouches[0].clientX - rect.left;
+                const videoWidth = rect.width;
+
+                if (tapX < videoWidth / 3) {
+                    // Left third - rewind 10s
+                    video.currentTime = Math.max(0, video.currentTime - 10);
+                    showToast('⏪ -10s');
+                } else if (tapX > videoWidth * 2 / 3) {
+                    // Right third - forward 10s
+                    video.currentTime = Math.min(video.duration, video.currentTime + 10);
+                    showToast('⏩ +10s');
+                } else {
+                    // Center - play/pause
+                    if (video.paused) {
+                        video.play();
+                    } else {
+                        video.pause();
+                    }
+                }
+
+                e.preventDefault();
+            }
+
+            lastTap = currentTime;
+        });
+
+        // Pinch to zoom (future enhancement)
+        let initialDistance = 0;
+        video.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                initialDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+            }
+        }, { passive: true });
+
+        video.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 2) {
+                const currentDistance = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+
+                const scale = currentDistance / initialDistance;
+                if (scale > 1.2) {
+                    // Pinch out - enter fullscreen
+                    if (!document.fullscreenElement) {
+                        video.requestFullscreen().catch(() => {});
+                    }
+                } else if (scale < 0.8) {
+                    // Pinch in - exit fullscreen
+                    if (document.fullscreenElement) {
+                        document.exitFullscreen().catch(() => {});
+                    }
+                }
+            }
+        }, { passive: true });
+
+        // Prevent pull-to-refresh on video element
+        video.addEventListener('touchstart', (e) => {
+            if (window.scrollY === 0) {
+                e.preventDefault();
+            }
+        }, { passive: false });
     </script>
     <!-- HLS.js Library (Adaptive Bitrate Streaming) -->
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <!-- PWA Install Prompt -->
+    <script src="/static/pwa-install.js"></script>
 
     <script>
         if ('serviceWorker' in navigator) {

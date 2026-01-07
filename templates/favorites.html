@@ -339,6 +339,9 @@
         </div>
     </div>
 
+    <!-- PWA Install Prompt -->
+    <script src="/static/pwa-install.js"></script>
+
     <script>
         const userId = {{ user_id }};
         let allVideos = {% if videos %}{{ videos|tojson|safe }}{% else %}[]{% endif %};
@@ -505,6 +508,9 @@
             });
         }
     </script>
+    <!-- PWA Install Prompt -->
+    <script src="/static/pwa-install.js"></script>
+
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');
