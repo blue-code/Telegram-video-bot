@@ -302,6 +302,84 @@
             display: block;
         }
 
+        .playlist-container {
+            margin: 20px 0;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            border: 2px solid rgba(102, 126, 234, 0.3);
+        }
+
+        .playlist-container h3 {
+            margin-bottom: 5px;
+            color: #667eea;
+            font-size: 18px;
+        }
+
+        .playlist-container p {
+            margin-bottom: 15px;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+        }
+
+        .playlist-actions {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .playlist-actions button {
+            flex: 1;
+            padding: 8px 16px;
+            font-size: 14px;
+        }
+
+        .playlist-items {
+            max-height: 400px;
+            overflow-y: auto;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+        }
+
+        .playlist-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            margin-bottom: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
+        }
+
+        .playlist-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(102, 126, 234, 0.5);
+        }
+
+        .playlist-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .playlist-item-info {
+            flex: 1;
+        }
+
+        .playlist-item-title {
+            font-size: 14px;
+            color: #fff;
+            margin-bottom: 4px;
+        }
+
+        .playlist-item-duration {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
         @media (max-width: 768px) {
             .header h1 {
                 font-size: 24px;
@@ -323,7 +401,8 @@
         <div class="nav-links">
             <a href="/dashboard/{{ user_id }}">대시보드</a>
             <a href="/gallery/{{ user_id }}">갤러리</a>
-            <a href="/search?user_id={{ user_id }}">검색</a>
+            <a href="/favorites/{{ user_id }}">즐겨찾기</a>
+            <a href="/queue/{{ user_id }}">큐</a>
             <a href="/download?user_id={{ user_id }}">다운로드/업로드</a>
         </div>
     </nav>
@@ -344,12 +423,34 @@
                 <form id="url-form">
                     <div class="form-group">
                         <label for="video-url">Video URL</label>
-                        <input 
-                            type="url" 
-                            id="video-url" 
-                            placeholder="https://www.youtube.com/watch?v=..." 
+                        <input
+                            type="url"
+                            id="video-url"
+                            placeholder="https://www.youtube.com/watch?v=... or playlist URL"
                             required
                         >
+                    </div>
+
+                    <button type="button" class="btn btn-secondary" id="analyze-btn" style="margin-bottom: 20px;">
+                        <span>🔍</span>
+                        <span>Analyze URL</span>
+                    </button>
+
+                    <!-- Playlist Selection UI (Hidden by default) -->
+                    <div class="playlist-container" id="playlist-container" style="display: none;">
+                        <h3 id="playlist-title"></h3>
+                        <p id="playlist-count"></p>
+
+                        <div class="playlist-actions">
+                            <button type="button" class="btn btn-secondary" id="select-all-btn">
+                                ✓ Select All
+                            </button>
+                            <button type="button" class="btn btn-secondary" id="deselect-all-btn">
+                                ✗ Deselect All
+                            </button>
+                        </div>
+
+                        <div class="playlist-items" id="playlist-items"></div>
                     </div>
 
                     <div class="form-group">
@@ -366,10 +467,10 @@
 
                     <div class="form-group">
                         <label for="user-id">User ID</label>
-                        <input 
-                            type="number" 
-                            id="user-id" 
-                            placeholder="Enter your user ID" 
+                        <input
+                            type="number"
+                            id="user-id"
+                            placeholder="Enter your user ID"
                             value="{{ user_id if user_id is not none else '' }}"
                             required
                         >
@@ -377,7 +478,7 @@
 
                     <button type="submit" class="btn btn-primary" id="download-btn">
                         <span>⬇️</span>
-                        <span>Download Video</span>
+                        <span>Download</span>
                     </button>
                 </form>
 
@@ -453,6 +554,10 @@
 
         const presetUserId = "{{ user_id if user_id is not none else '' }}";
 
+        // Playlist data
+        let playlistData = null;
+        let selectedVideos = new Set();
+
         // Tab switching
         const tabs = document.querySelectorAll('.tab');
         const tabContents = document.querySelectorAll('.tab-content');
@@ -481,10 +586,187 @@
         const urlResultMessage = document.getElementById('url-result-message');
         const watchNowBtn = document.getElementById('watch-now-btn');
         const downloadBtn = document.getElementById('download-btn');
+        const analyzeBtn = document.getElementById('analyze-btn');
+        const playlistContainer = document.getElementById('playlist-container');
+        const playlistTitle = document.getElementById('playlist-title');
+        const playlistCount = document.getElementById('playlist-count');
+        const playlistItems = document.getElementById('playlist-items');
+        const selectAllBtn = document.getElementById('select-all-btn');
+        const deselectAllBtn = document.getElementById('deselect-all-btn');
+
+        // Analyze URL Button
+        analyzeBtn.addEventListener('click', async () => {
+            const url = document.getElementById('video-url').value;
+            if (!url) {
+                alert('Please enter a URL');
+                return;
+            }
+
+            analyzeBtn.disabled = true;
+            analyzeBtn.textContent = '🔄 Analyzing...';
+
+            try {
+                const response = await fetch('/api/extract-info', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ url: url })
+                });
+
+                const data = await response.json();
+
+                if (!data.success) {
+                    throw new Error(data.message || 'Analysis failed');
+                }
+
+                if (data.is_playlist) {
+                    // Show playlist UI
+                    playlistData = data;
+                    selectedVideos.clear();
+
+                    playlistTitle.textContent = `🎬 ${data.title}`;
+                    playlistCount.textContent = `${data.count} videos found`;
+
+                    // Render playlist items
+                    playlistItems.innerHTML = '';
+                    data.entries.forEach((entry, index) => {
+                        const duration = entry.duration ? formatDuration(entry.duration) : 'N/A';
+                        const itemDiv = document.createElement('div');
+                        itemDiv.className = 'playlist-item';
+                        itemDiv.innerHTML = `
+                            <input type="checkbox" class="playlist-checkbox" data-index="${index}" checked>
+                            <div class="playlist-item-info">
+                                <div class="playlist-item-title">${index + 1}. ${entry.title}</div>
+                                <div class="playlist-item-duration">⏱ ${duration}</div>
+                            </div>
+                        `;
+                        playlistItems.appendChild(itemDiv);
+                        selectedVideos.add(index);
+                    });
+
+                    // Add checkbox event listeners
+                    document.querySelectorAll('.playlist-checkbox').forEach(checkbox => {
+                        checkbox.addEventListener('change', (e) => {
+                            const index = parseInt(e.target.dataset.index);
+                            if (e.target.checked) {
+                                selectedVideos.add(index);
+                            } else {
+                                selectedVideos.delete(index);
+                            }
+                            updateDownloadButton();
+                        });
+                    });
+
+                    playlistContainer.style.display = 'block';
+                    downloadBtn.textContent = `⬇️ Download ${selectedVideos.size} videos`;
+                } else {
+                    // Single video - hide playlist UI
+                    playlistContainer.style.display = 'none';
+                    playlistData = null;
+                    downloadBtn.textContent = '⬇️ Download Video';
+                    alert(`✅ Single video detected: ${data.title}`);
+                }
+            } catch (error) {
+                alert(`❌ Error: ${error.message}`);
+                playlistContainer.style.display = 'none';
+            } finally {
+                analyzeBtn.disabled = false;
+                analyzeBtn.innerHTML = '<span>🔍</span><span>Analyze URL</span>';
+            }
+        });
+
+        // Select All Button
+        selectAllBtn.addEventListener('click', () => {
+            document.querySelectorAll('.playlist-checkbox').forEach((checkbox, index) => {
+                checkbox.checked = true;
+                selectedVideos.add(index);
+            });
+            updateDownloadButton();
+        });
+
+        // Deselect All Button
+        deselectAllBtn.addEventListener('click', () => {
+            document.querySelectorAll('.playlist-checkbox').forEach((checkbox, index) => {
+                checkbox.checked = false;
+                selectedVideos.delete(index);
+            });
+            updateDownloadButton();
+        });
+
+        function updateDownloadButton() {
+            if (playlistData && selectedVideos.size > 0) {
+                downloadBtn.textContent = `⬇️ Download ${selectedVideos.size} video${selectedVideos.size > 1 ? 's' : ''}`;
+                downloadBtn.disabled = false;
+            } else if (playlistData) {
+                downloadBtn.textContent = '⬇️ Select videos to download';
+                downloadBtn.disabled = true;
+            }
+        }
+
+        function formatDuration(seconds) {
+            if (!seconds) return '0:00';
+            const hrs = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = seconds % 60;
+            if (hrs > 0) {
+                return `${hrs}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            }
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // SSE Progress Tracking
+        let currentEventSource = null;
+
+        function watchProgress(taskId, videoTitle) {
+            if (currentEventSource) {
+                currentEventSource.close();
+            }
+
+            currentEventSource = new EventSource(`/stream/progress/${taskId}`);
+
+            currentEventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    if (data.error) {
+                        console.error('SSE Error:', data.error);
+                        return;
+                    }
+
+                    // Update progress UI
+                    urlProgressFill.style.width = `${data.progress}%`;
+                    urlProgressStatus.textContent = `${data.progress.toFixed(1)}% - ${data.title || videoTitle}`;
+
+                    // Handle completion
+                    if (data.status === 'completed') {
+                        currentEventSource.close();
+                        urlProgressFill.style.width = '100%';
+                        urlProgressStatus.textContent = 'Complete!';
+                    } else if (data.status === 'failed') {
+                        currentEventSource.close();
+                        urlProgress.classList.remove('active');
+                        urlResult.classList.add('active');
+                        urlResult.classList.add('error');
+                        urlResult.querySelector('h3').textContent = '❌ Download Failed';
+                        urlResultMessage.textContent = data.error || 'Unknown error';
+                        watchNowBtn.style.display = 'none';
+                        downloadBtn.disabled = false;
+                    }
+                } catch (error) {
+                    console.error('Error parsing SSE data:', error);
+                }
+            };
+
+            currentEventSource.onerror = (error) => {
+                console.error('SSE Connection error:', error);
+                currentEventSource.close();
+            };
+        }
 
         urlForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            
+
             const url = document.getElementById('video-url').value;
             const quality = document.getElementById('quality').value;
             const userIdValue = document.getElementById('user-id').value || presetUserId;
@@ -494,37 +776,133 @@
             urlProgress.classList.add('active');
             urlResult.classList.remove('active');
             downloadBtn.disabled = true;
-            urlProgressFill.style.width = '30%';
-            urlProgressStatus.textContent = 'Downloading video...';
 
             try {
-                const response = await fetch('/api/web-download', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        url: url,
-                        quality: quality,
-                        user_id: userId
-                    })
-                });
+                if (playlistData && selectedVideos.size > 0) {
+                    // Playlist download (순차 처리, SSE는 각 영상별로)
+                    const selectedEntries = playlistData.entries.filter((_, index) => selectedVideos.has(index));
+                    const total = selectedEntries.length;
+                    let completed = 0;
+                    let failed = 0;
+                    let lastShortId = null;
 
-                const data = await response.json();
+                    for (const entry of selectedEntries) {
+                        try {
+                            const entryUrl = entry.url || `https://www.youtube.com/watch?v=${entry.id}`;
+                            urlProgressStatus.textContent = `[${completed + 1}/${total}] Starting: ${entry.title.substring(0, 40)}...`;
 
-                urlProgressFill.style.width = '100%';
-                
-                if (data.success) {
-                    urlProgressStatus.textContent = 'Complete!';
+                            const response = await fetch('/api/web-download', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({
+                                    url: entryUrl,
+                                    quality: quality,
+                                    user_id: userId
+                                })
+                            });
+
+                            const data = await response.json();
+
+                            if (data.success && data.task_id) {
+                                // Watch progress via SSE
+                                await new Promise((resolve) => {
+                                    const sse = new EventSource(`/stream/progress/${data.task_id}`);
+                                    sse.onmessage = (event) => {
+                                        const progressData = JSON.parse(event.data);
+                                        urlProgressFill.style.width = `${(completed / total) * 100 + (progressData.progress / total)}%`;
+                                        urlProgressStatus.textContent = `[${completed + 1}/${total}] ${progressData.progress.toFixed(0)}% - ${entry.title.substring(0, 30)}`;
+
+                                        if (progressData.status === 'completed') {
+                                            sse.close();
+                                            completed++;
+                                            lastShortId = data.short_id;
+                                            resolve();
+                                        } else if (progressData.status === 'failed') {
+                                            sse.close();
+                                            failed++;
+                                            resolve();
+                                        }
+                                    };
+                                    sse.onerror = () => {
+                                        sse.close();
+                                        failed++;
+                                        resolve();
+                                    };
+                                });
+                            } else {
+                                failed++;
+                            }
+                        } catch (error) {
+                            failed++;
+                            console.error(`Error downloading: ${entry.title}`, error);
+                        }
+                    }
+
+                    urlProgressFill.style.width = '100%';
+                    urlProgressStatus.textContent = 'Playlist download complete!';
+
                     setTimeout(() => {
                         urlProgress.classList.remove('active');
                         urlResult.classList.add('active');
                         urlResult.classList.remove('error');
-                        urlResultMessage.textContent = `${data.title} has been downloaded successfully!`;
-                        watchNowBtn.href = `/watch/${data.short_id}`;
+                        urlResultMessage.textContent = `✅ Downloaded ${completed} of ${total} videos${failed > 0 ? ` (${failed} failed)` : ''}`;
+                        watchNowBtn.href = `/gallery/${userId}`;
+                        watchNowBtn.innerHTML = '<span>📚</span><span>View Gallery</span>';
                     }, 500);
                 } else {
-                    throw new Error(data.message || 'Download failed');
+                    // Single video download with SSE
+                    urlProgressFill.style.width = '10%';
+                    urlProgressStatus.textContent = 'Starting download...';
+
+                    const response = await fetch('/api/web-download', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            url: url,
+                            quality: quality,
+                            user_id: userId
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (data.success && data.task_id) {
+                        // Watch progress via SSE
+                        await new Promise((resolve, reject) => {
+                            const sse = new EventSource(`/stream/progress/${data.task_id}`);
+                            sse.onmessage = (event) => {
+                                const progressData = JSON.parse(event.data);
+                                urlProgressFill.style.width = `${progressData.progress}%`;
+                                urlProgressStatus.textContent = `${progressData.progress.toFixed(1)}% - ${progressData.title}`;
+
+                                if (progressData.status === 'completed') {
+                                    sse.close();
+                                    setTimeout(() => {
+                                        urlProgress.classList.remove('active');
+                                        urlResult.classList.add('active');
+                                        urlResult.classList.remove('error');
+                                        urlResultMessage.textContent = `${data.title} has been downloaded successfully!`;
+                                        watchNowBtn.href = `/watch/${data.short_id}`;
+                                        watchNowBtn.innerHTML = '<span>▶️</span><span>Watch Now</span>';
+                                        resolve();
+                                    }, 500);
+                                } else if (progressData.status === 'failed') {
+                                    sse.close();
+                                    reject(new Error(progressData.error || 'Download failed'));
+                                }
+                            };
+                            sse.onerror = (error) => {
+                                sse.close();
+                                reject(error);
+                            };
+                        });
+                    } else {
+                        throw new Error(data.message || 'Download failed');
+                    }
                 }
             } catch (error) {
                 urlProgress.classList.remove('active');
@@ -661,6 +1039,14 @@
             uploadResult.classList.remove('active');
             urlProgressFill.style.width = '0%';
             uploadProgressFill.style.width = '0%';
+
+            // Reset playlist UI
+            playlistData = null;
+            selectedVideos.clear();
+            playlistContainer.style.display = 'none';
+            playlistItems.innerHTML = '';
+            downloadBtn.textContent = '⬇️ Download';
+            downloadBtn.disabled = false;
         }
     </script>
 </body>

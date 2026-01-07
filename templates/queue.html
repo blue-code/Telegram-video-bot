@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download Queue - TVB</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .top-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 12px 16px;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .top-nav .brand {
+            font-weight: 700;
+            color: #fff;
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .nav-links a {
+            color: #fff;
+            text-decoration: none;
+            font-size: 14px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .nav-links a:hover {
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 42px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 18px;
+            color: #e0e0e0;
+        }
+
+        .queue-stats {
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-around;
+            gap: 20px;
+        }
+
+        .stat-item {
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: 700;
+            color: #667eea;
+        }
+
+        .stat-label {
+            font-size: 14px;
+            color: #aaa;
+            margin-top: 5px;
+        }
+
+        .queue-section {
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            padding: 25px;
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .section-title {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .download-item {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .download-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .download-title {
+            font-size: 16px;
+            font-weight: 600;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .download-status {
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(102, 126, 234, 0.3);
+            color: #667eea;
+        }
+
+        .download-status.downloading {
+            background: rgba(16, 185, 129, 0.3);
+            color: #10b981;
+        }
+
+        .download-status.completed {
+            background: rgba(59, 130, 246, 0.3);
+            color: #3b82f6;
+        }
+
+        .download-status.failed {
+            background: rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+        }
+
+        .progress-container {
+            margin-top: 10px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+            transition: width 0.3s;
+        }
+
+        .progress-text {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #aaa;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            display: none;
+        }
+
+        .empty-state.active {
+            display: block;
+        }
+
+        .empty-icon {
+            font-size: 80px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .empty-text {
+            font-size: 20px;
+            color: #e0e0e0;
+            margin-bottom: 20px;
+        }
+
+        .empty-cta {
+            display: inline-block;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: transform 0.2s;
+        }
+
+        .empty-cta:hover {
+            transform: translateY(-2px);
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 32px;
+            }
+
+            .queue-stats {
+                flex-direction: column;
+            }
+
+            .download-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 10px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="top-nav">
+            <a class="brand" href="/dashboard/{{ user_id }}">TVB</a>
+            <div class="nav-links">
+                <a href="/dashboard/{{ user_id }}">대시보드</a>
+                <a href="/gallery/{{ user_id }}">갤러리</a>
+                <a href="/favorites/{{ user_id }}">즐겨찾기</a>
+                <a href="/queue/{{ user_id }}">큐</a>
+                <a href="/download?user_id={{ user_id }}">다운로드/업로드</a>
+            </div>
+        </nav>
+
+        <div class="header">
+            <h1>📋 Download Queue</h1>
+            <p>Monitor your downloads in real-time</p>
+        </div>
+
+        <div class="queue-stats">
+            <div class="stat-item">
+                <div class="stat-number" id="active-count">0</div>
+                <div class="stat-label">Active Downloads</div>
+            </div>
+            <div class="stat-item">
+                <div class="stat-number" id="total-progress">0%</div>
+                <div class="stat-label">Overall Progress</div>
+            </div>
+        </div>
+
+        <div class="queue-section" id="active-section" style="display: none;">
+            <div class="section-title">
+                <span>⬇️</span>
+                <span>Active Downloads</span>
+            </div>
+            <div id="active-downloads"></div>
+        </div>
+
+        <div class="empty-state active" id="empty-state">
+            <div class="empty-icon">📭</div>
+            <p class="empty-text">No active downloads</p>
+            <a href="/download?user_id={{ user_id }}" class="empty-cta">Start Download</a>
+        </div>
+    </div>
+
+    <script>
+        const userId = {{ user_id }};
+        let eventSources = {};
+
+        // Refresh queue status
+        async function refreshQueue() {
+            try {
+                const response = await fetch('/api/queue/status');
+                const data = await response.json();
+
+                if (data.success) {
+                    updateQueueUI(data.active_downloads);
+                }
+            } catch (error) {
+                console.error('Error refreshing queue:', error);
+            }
+        }
+
+        function updateQueueUI(downloads) {
+            const activeSection = document.getElementById('active-section');
+            const emptyState = document.getElementById('empty-state');
+            const activeDownloads = document.getElementById('active-downloads');
+            const activeCount = document.getElementById('active-count');
+
+            activeCount.textContent = downloads.length;
+
+            if (downloads.length === 0) {
+                activeSection.style.display = 'none';
+                emptyState.classList.add('active');
+                return;
+            }
+
+            activeSection.style.display = 'block';
+            emptyState.classList.remove('active');
+
+            // Close old SSE connections
+            for (const taskId in eventSources) {
+                if (!downloads.find(d => d.task_id === taskId)) {
+                    eventSources[taskId].close();
+                    delete eventSources[taskId];
+                }
+            }
+
+            // Render downloads
+            activeDownloads.innerHTML = downloads.map(download => createDownloadItem(download)).join('');
+
+            // Start SSE for each download
+            downloads.forEach(download => {
+                if (!eventSources[download.task_id]) {
+                    watchDownload(download.task_id);
+                }
+            });
+
+            // Update overall progress
+            const totalProgress = downloads.reduce((sum, d) => sum + d.progress, 0) / downloads.length;
+            document.getElementById('total-progress').textContent = `${totalProgress.toFixed(1)}%`;
+        }
+
+        function createDownloadItem(download) {
+            return `
+                <div class="download-item" id="download-${download.task_id}">
+                    <div class="download-header">
+                        <div class="download-title">${escapeHtml(download.title)}</div>
+                        <div class="download-status ${download.status}">${download.status}</div>
+                    </div>
+                    <div class="progress-container">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progress-${download.task_id}" style="width: ${download.progress}%"></div>
+                        </div>
+                        <div class="progress-text">
+                            <span id="progress-text-${download.task_id}">${download.progress.toFixed(1)}%</span>
+                            <span id="status-text-${download.task_id}">Downloading...</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function watchDownload(taskId) {
+            const eventSource = new EventSource(`/stream/progress/${taskId}`);
+
+            eventSource.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+
+                    // Update progress bar
+                    const progressFill = document.getElementById(`progress-${taskId}`);
+                    const progressText = document.getElementById(`progress-text-${taskId}`);
+                    const statusText = document.getElementById(`status-text-${taskId}`);
+
+                    if (progressFill) {
+                        progressFill.style.width = `${data.progress}%`;
+                    }
+                    if (progressText) {
+                        progressText.textContent = `${data.progress.toFixed(1)}%`;
+                    }
+                    if (statusText) {
+                        statusText.textContent = data.title || 'Downloading...';
+                    }
+
+                    // Close connection if completed
+                    if (data.status === 'completed' || data.status === 'failed') {
+                        eventSource.close();
+                        delete eventSources[taskId];
+
+                        // Refresh queue after a short delay
+                        setTimeout(() => {
+                            refreshQueue();
+                        }, 1000);
+                    }
+                } catch (error) {
+                    console.error('Error parsing SSE data:', error);
+                }
+            };
+
+            eventSource.onerror = (error) => {
+                console.error('SSE error:', error);
+                eventSource.close();
+                delete eventSources[taskId];
+            };
+
+            eventSources[taskId] = eventSource;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Initial load
+        refreshQueue();
+
+        // Refresh every 5 seconds
+        setInterval(refreshQueue, 5000);
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            for (const taskId in eventSources) {
+                eventSources[taskId].close();
+            }
+        });
+    </script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/service-worker.js');
+        }
+    </script>
+</body>
+</html>
