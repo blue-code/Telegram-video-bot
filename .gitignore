@@ -17,6 +17,7 @@ venv_win/
 # Downloads and temp files
 downloads/
 uploads/
+hls_cache/
 *.tmp
 *.log
 

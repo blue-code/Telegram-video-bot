@@ -2258,3 +2258,188 @@ async def update_video(
     except Exception as e:
         logger.error(f"Update video error: {e}")
         return {"success": False, "message": str(e)}
+
+
+# HLS (HTTP Live Streaming) Endpoints
+HLS_CACHE_DIR = Path("hls_cache")
+HLS_CACHE_DIR.mkdir(exist_ok=True)
+HLS_SEGMENT_DURATION = 6  # seconds per segment
+
+
+async def generate_hls_for_video(short_id: str) -> Optional[Path]:
+    """
+    Generate HLS segments and playlist for a video.
+    Returns the directory containing HLS files or None if failed.
+    """
+    from src.db import get_video_by_short_id
+
+    try:
+        # Check cache first
+        hls_dir = HLS_CACHE_DIR / short_id
+        master_playlist = hls_dir / "master.m3u8"
+
+        if master_playlist.exists():
+            logger.info(f"HLS cache hit for {short_id}")
+            return hls_dir
+
+        # Get video info
+        video = await get_video_by_short_id(short_id)
+        if not video:
+            logger.error(f"Video not found: {short_id}")
+            return None
+
+        # Create HLS directory
+        hls_dir.mkdir(parents=True, exist_ok=True)
+
+        # Get video file
+        metadata = video.get("metadata") or {}
+        parts = metadata.get("parts") or []
+
+        # For multi-part videos, concatenate first
+        if parts and len(parts) > 1:
+            # Download and concatenate parts
+            file_ids = [p.get("file_id") for p in sorted(parts, key=lambda x: x.get("part", 0))]
+            download_urls = await asyncio.gather(
+                *[get_file_path_from_telegram(fid) for fid in file_ids if fid]
+            )
+
+            # Download parts to temp directory
+            temp_dir = tempfile.mkdtemp()
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as client:
+                    part_files = []
+                    for idx, url in enumerate(download_urls, 1):
+                        part_path = os.path.join(temp_dir, f"part_{idx}.mp4")
+                        async with client.stream("GET", url) as r:
+                            r.raise_for_status()
+                            with open(part_path, "wb") as f:
+                                async for chunk in r.aiter_bytes(chunk_size=CHUNK_SIZE_LARGE):
+                                    f.write(chunk)
+                        part_files.append(part_path)
+
+                    # Concatenate using ffmpeg
+                    concat_list = os.path.join(temp_dir, "concat.txt")
+                    with open(concat_list, "w") as f:
+                        for pf in part_files:
+                            f.write(f"file '{pf}'\n")
+
+                    input_video = os.path.join(temp_dir, "full.mp4")
+                    concat_cmd = [
+                        "ffmpeg", "-f", "concat", "-safe", "0",
+                        "-i", concat_list, "-c", "copy", input_video
+                    ]
+                    subprocess.run(concat_cmd, check=True, capture_output=True)
+
+            except Exception as e:
+                logger.error(f"Part concatenation failed: {e}")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return None
+        else:
+            # Single file - download it
+            file_id = video.get("file_id")
+            if not file_id:
+                logger.error(f"No file_id for video {short_id}")
+                return None
+
+            download_url = await get_file_path_from_telegram(file_id)
+            temp_dir = tempfile.mkdtemp()
+
+            try:
+                input_video = os.path.join(temp_dir, "video.mp4")
+                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as client:
+                    async with client.stream("GET", download_url) as r:
+                        r.raise_for_status()
+                        with open(input_video, "wb") as f:
+                            async for chunk in r.aiter_bytes(chunk_size=CHUNK_SIZE_LARGE):
+                                f.write(chunk)
+            except Exception as e:
+                logger.error(f"Video download failed: {e}")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return None
+
+        # Generate HLS segments
+        try:
+            output_pattern = str(hls_dir / "segment%03d.ts")
+            playlist_path = str(hls_dir / "index.m3u8")
+
+            hls_cmd = [
+                "ffmpeg",
+                "-i", input_video,
+                "-c:v", "copy",  # Copy video codec (fast)
+                "-c:a", "copy",  # Copy audio codec (fast)
+                "-f", "hls",
+                "-hls_time", str(HLS_SEGMENT_DURATION),
+                "-hls_list_size", "0",  # Keep all segments in playlist
+                "-hls_segment_filename", output_pattern,
+                playlist_path
+            ]
+
+            result = subprocess.run(hls_cmd, capture_output=True, text=True, timeout=300)
+
+            if result.returncode != 0:
+                logger.error(f"HLS generation failed: {result.stderr}")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return None
+
+            # Create master playlist
+            with open(master_playlist, "w") as f:
+                f.write("#EXTM3U\n")
+                f.write("#EXT-X-VERSION:3\n")
+                f.write("#EXT-X-STREAM-INF:BANDWIDTH=5000000\n")
+                f.write("index.m3u8\n")
+
+            logger.info(f"HLS generated successfully for {short_id}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return hls_dir
+
+        except subprocess.TimeoutExpired:
+            logger.error(f"HLS generation timeout for {short_id}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None
+        except Exception as e:
+            logger.error(f"HLS generation error: {e}")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return None
+
+    except Exception as e:
+        logger.error(f"HLS generation failed for {short_id}: {e}")
+        return None
+
+
+@app.get("/api/hls/{short_id}/{filename}")
+async def serve_hls_file(short_id: str, filename: str):
+    """Serve HLS playlist or segment files"""
+    try:
+        # Generate HLS if not exists
+        hls_dir = await generate_hls_for_video(short_id)
+
+        if not hls_dir:
+            raise HTTPException(status_code=404, detail="HLS generation failed")
+
+        file_path = hls_dir / filename
+
+        if not file_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Determine media type
+        if filename.endswith(".m3u8"):
+            media_type = "application/vnd.apple.mpegurl"
+        elif filename.endswith(".ts"):
+            media_type = "video/MP2T"
+        else:
+            media_type = "application/octet-stream"
+
+        return FileResponse(
+            file_path,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "public, max-age=3600",
+                "Access-Control-Allow-Origin": "*"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"HLS file serve error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

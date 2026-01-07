@@ -383,10 +383,12 @@
             playlist.findIndex(item => item.file_id === '{{ file_id }}')
         );
         const concatUrl = `/stream/concat/${shortId}`;
+        const hlsUrl = `/api/hls/${shortId}/master.m3u8`;
         let concatFailed = false;
         let usePartsPlayback = playlistTotal <= 1;
         let bufferingTimeout = null;
         let prefetchedParts = new Set(); // Track prefetched parts
+        let hls = null; // HLS.js instance
 
         function updatePartMeta() {
             if (playlistTotal <= 1 || !usePartsPlayback) {
@@ -397,6 +399,86 @@
             const part = current?.part || currentIndex + 1;
             partMeta.style.display = 'flex';
             partLabel.textContent = `Part ${part} / ${playlistTotal}`;
+        }
+
+        function initHLS(url) {
+            // Initialize HLS.js player for Adaptive Bitrate Streaming
+            if (Hls.isSupported()) {
+                hls = new Hls({
+                    debug: false,
+                    enableWorker: true,
+                    lowLatencyMode: false,
+                    backBufferLength: 90,
+                    maxBufferLength: 30,
+                    maxBufferSize: 60 * 1000 * 1000, // 60MB
+                    maxBufferHole: 0.5,
+                    highBufferWatchdogPeriod: 2,
+                    nudgeOffset: 0.1,
+                    nudgeMaxRetry: 3,
+                    maxFragLookUpTolerance: 0.25,
+                    liveSyncDurationCount: 3,
+                    liveMaxLatencyDurationCount: 10,
+                    liveDurationInfinity: false,
+                    preferManagedMediaSource: false
+                });
+
+                hls.loadSource(url);
+                hls.attachMedia(video);
+
+                hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                    console.log('HLS manifest loaded, starting playback');
+                    video.play().catch(e => console.log('Auto-play prevented:', e));
+                });
+
+                hls.on(Hls.Events.ERROR, function(event, data) {
+                    if (data.fatal) {
+                        switch(data.type) {
+                            case Hls.ErrorTypes.NETWORK_ERROR:
+                                console.error('Fatal network error, trying to recover...');
+                                hls.startLoad();
+                                break;
+                            case Hls.ErrorTypes.MEDIA_ERROR:
+                                console.error('Fatal media error, trying to recover...');
+                                hls.recoverMediaError();
+                                break;
+                            default:
+                                console.error('Fatal error, cannot recover:', data);
+                                hls.destroy();
+                                // Fallback to native streaming
+                                fallbackToNativeStreaming();
+                                break;
+                        }
+                    }
+                });
+
+                return true;
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                // Native HLS support (Safari)
+                video.src = url;
+                video.addEventListener('loadedmetadata', function() {
+                    video.play().catch(e => console.log('Auto-play prevented:', e));
+                });
+                return true;
+            }
+
+            return false;
+        }
+
+        function fallbackToNativeStreaming() {
+            console.log('Falling back to native MP4 streaming');
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+
+            // Use concat or parts playback
+            if (playlistTotal > 1) {
+                video.src = concatUrl;
+                usePartsPlayback = false;
+            } else {
+                loadPart(0);
+                usePartsPlayback = true;
+            }
         }
 
         function prefetchNextPart(partIndex) {
@@ -453,13 +535,22 @@
             }
         }
         
-        if (playlistTotal > 1) {
-            video.src = concatUrl;
-            usePartsPlayback = false;
-        } else {
-            loadPart(0);
-            usePartsPlayback = true;
-        }
+        // Try HLS first for better adaptive streaming
+        fetch(hlsUrl, { method: 'HEAD' })
+            .then(response => {
+                if (response.ok) {
+                    console.log('HLS manifest available, using HLS.js');
+                    if (!initHLS(hlsUrl)) {
+                        fallbackToNativeStreaming();
+                    }
+                } else {
+                    throw new Error('HLS not available');
+                }
+            })
+            .catch(() => {
+                console.log('HLS not available, using native streaming');
+                fallbackToNativeStreaming();
+            });
 
         // Increment view count on page load
         fetch(`/api/increment-view/${shortId}`, { method: 'POST' })
@@ -682,6 +773,9 @@
             }, 3000);
         }
     </script>
+    <!-- HLS.js Library (Adaptive Bitrate Streaming) -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
     <script>
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');
