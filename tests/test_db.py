@@ -1,57 +1,63 @@
 import pytest
-import os
-from unittest.mock import patch, MagicMock
-# We will mock the actual DB connection for unit tests to avoid needing a real Mongo instance
-# unless we use testcontainers or have a local instance.
-# For this step, we just want to verify the module structure and connection logic exists.
-
-# We need to set python path or install the package in editable mode.
-# For now, let's assume we run pytest from root and src is discoverable if we add __init__.py
-# or configure pytest pythonpath.
+from unittest.mock import patch, MagicMock, AsyncMock
 
 @pytest.mark.asyncio
 async def test_get_database_structure():
-    # This import will fail first
     from src.db import get_database, close_database
     
-    # Mocking motor client
-    with patch("src.db.AsyncIOMotorClient") as mock_client:
-        mock_db = MagicMock()
-        mock_client.return_value.get_database.return_value = mock_db
+    with patch("src.db.create_async_client") as mock_create:
+        mock_client = AsyncMock()
+        mock_create.return_value = mock_client
         
         db = await get_database()
         assert db is not None
+        assert db == mock_client
         
         await close_database()
-        mock_client.return_value.close.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_crud_operations():
-    from src.db import save_video_metadata, get_video_by_url, get_database
-    from unittest.mock import AsyncMock
+    from src.db import save_video_metadata, get_video_by_url, get_video_by_file_id
     
-    with patch("src.db.AsyncIOMotorClient") as mock_client:
-        mock_db = MagicMock()
-        mock_collection = MagicMock()
+    with patch("src.db.create_async_client") as mock_create:
+        mock_client = AsyncMock()
+        mock_create.return_value = mock_client
         
-        # Mocking the chain: client[DB_NAME][COLLECTION_NAME]
-        mock_client.return_value.__getitem__.return_value = mock_db
-        mock_db.__getitem__.return_value = mock_collection
+        # Mock table builder pattern for upsert
+        mock_table = MagicMock()
+        mock_client.table.return_value = mock_table
         
-        # Configure async methods
-        mock_collection.insert_one = AsyncMock()
-        mock_collection.find_one = AsyncMock()
+        mock_upsert = MagicMock()
+        mock_table.upsert.return_value = mock_upsert
+        
+        mock_execute = AsyncMock()
+        mock_upsert.execute.return_value = mock_execute
+        mock_execute.data = [{"id": 1}]
 
-        # Test Save
+        # Test Save (Upsert)
         video_data = {"url": "http://test.com", "title": "Test Video"}
         await save_video_metadata(video_data)
-        mock_collection.insert_one.assert_called_with(video_data)
+        mock_table.upsert.assert_called_with(video_data, on_conflict="url")
+
+        # Mock select builder pattern
+        mock_select = MagicMock()
+        mock_table.select.return_value = mock_select
         
-        # Test Get
-        await get_video_by_url("http://test.com")
-        mock_collection.find_one.assert_called_with({"url": "http://test.com"})
+        mock_eq = MagicMock()
+        mock_select.eq.return_value = mock_eq
+        
+        mock_eq.execute = AsyncMock()
+        mock_eq.execute.return_value = mock_execute
+        mock_execute.data = [{"url": "http://test.com", "title": "Test Video"}]
+
+        # Test Get by URL
+        result = await get_video_by_url("http://test.com")
+        mock_table.select.assert_called_with("*")
+        mock_select.eq.assert_called_with("url", "http://test.com")
+        assert result["url"] == "http://test.com"
 
         # Test Get by File ID
-        from src.db import get_video_by_file_id
-        await get_video_by_file_id("file_123")
-        mock_collection.find_one.assert_called_with({"file_id": "file_123"})
+        mock_execute.data = [{"file_id": "file_123"}]
+        result = await get_video_by_file_id("file_123")
+        mock_select.eq.assert_called_with("file_id", "file_123")
+        assert result["file_id"] == "file_123"

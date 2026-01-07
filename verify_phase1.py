@@ -3,19 +3,26 @@ import os
 from src.db import get_database, close_database
 
 async def verify():
-    print("Verifying Database Connection...")
-    uri = os.getenv("MONGO_URI")
-    if not uri or uri == "placeholder_mongo_uri":
-        print("WARNING: MONGO_URI is set to placeholder or missing. Real connection cannot be established.")
-    else:
-        print(f"Using MONGO_URI: {uri[:10]}...")
+    print("Verifying Supabase Database Connection...")
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_KEY")
+    
+    if not url or not key:
+        print("ERROR: SUPABASE_URL or SUPABASE_KEY is missing in .env!")
+        return
+
+    print(f"Using Supabase URL: {url[:20]}...")
 
     try:
-        db = await get_database()
-        print(f"Successfully initialized MongoDB client for database: {db.name}")
+        sb = await get_database()
+        # Attempt a simple query to verify connection
+        # We try to select from 'videos' table (even if empty)
+        await sb.table("videos").select("*", count="exact").limit(1).execute()
+        print("Successfully connected to Supabase and verified 'videos' table.")
         print("Phase 1 (Database Setup) Verification: SUCCESS")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error connecting to Supabase: {e}")
+        print("Make sure you have created the 'videos' table in Supabase SQL Editor.")
     finally:
         await close_database()
 

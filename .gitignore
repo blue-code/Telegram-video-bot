@@ -29,3 +29,4 @@ fix_env.py
 add_env.py
 get_channel_id.py
 verify_channel_post.py
+venv_linux/

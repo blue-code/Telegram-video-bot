@@ -4,5 +4,5 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-## [ ] Track: Telegram Bot MVP
+## [~] Track: Telegram Bot MVP
 *Link: [./conductor/tracks/bot_mvp_20251231/](./conductor/tracks/bot_mvp_20251231/)*

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(timeout 15 python:*)",
+      "Bash(find:*)",
+      "Bash(python3:*)",
+      "Bash(pip install:*)",
+      "Bash(python3.11:*)",
+      "Bash(OPENSSL_CONF=/dev/null python3:*)",
+      "Bash(brew install python@3.11)",
+      "Bash(/opt/homebrew/bin/python3.11:*)",
+      "Bash(source:*)",
+      "WebSearch",
+      "Bash(OPENSSL_CONF=/Volumes/SSD/DEV_SSD/MY/telegram_video_bot/openssl_legacy.cnf python3:*)",
+      "Bash(brew install python@3.10)",
+      "Bash(/opt/homebrew/bin/python3.10:*)"
+    ]
+  }
+}
