@@ -309,7 +309,7 @@
             </div>
 
             <div class="video-container">
-                <video id="video-player" controls autoplay name="media">
+                <video id="video-player" controls autoplay preload="auto" name="media">
                     Your browser does not support the video tag.
                 </video>
                 <div class="loading-spinner" id="loading-spinner"></div>
@@ -403,23 +403,44 @@
 
         function initHLS(url) {
             // Initialize HLS.js player for Adaptive Bitrate Streaming
+            // Optimized for seamless playback with aggressive buffering
             if (Hls.isSupported()) {
                 hls = new Hls({
                     debug: false,
                     enableWorker: true,
                     lowLatencyMode: false,
+
+                    // Buffer settings - aggressive for seamless playback
                     backBufferLength: 90,
-                    maxBufferLength: 30,
-                    maxBufferSize: 60 * 1000 * 1000, // 60MB
-                    maxBufferHole: 0.5,
-                    highBufferWatchdogPeriod: 2,
-                    nudgeOffset: 0.1,
-                    nudgeMaxRetry: 3,
-                    maxFragLookUpTolerance: 0.25,
+                    maxBufferLength: 60,  // Increased from 30 to 60 seconds
+                    maxMaxBufferLength: 120,  // Maximum buffer length
+                    maxBufferSize: 150 * 1000 * 1000, // Increased from 60MB to 150MB
+                    maxBufferHole: 0.3,  // Reduced from 0.5 for tighter gap handling
+
+                    // Fragment loading optimization
+                    maxFragLookUpTolerance: 0.1,  // Reduced for precise seeking
+                    highBufferWatchdogPeriod: 1,  // More frequent monitoring
+                    nudgeOffset: 0.05,  // Smaller nudge for smoother playback
+                    nudgeMaxRetry: 5,  // More retries
+
+                    // Streaming optimization
+                    maxLoadingDelay: 2,  // Faster segment loading
+                    maxStarvationDelay: 2,  // Faster recovery from starvation
+                    manifestLoadingTimeOut: 10000,
+                    manifestLoadingMaxRetry: 3,
+                    manifestLoadingRetryDelay: 500,
+
+                    // Live streaming (not used but kept for compatibility)
                     liveSyncDurationCount: 3,
                     liveMaxLatencyDurationCount: 10,
                     liveDurationInfinity: false,
-                    preferManagedMediaSource: false
+
+                    // Performance
+                    preferManagedMediaSource: false,
+                    progressive: true,  // Enable progressive loading
+
+                    // Start position
+                    startPosition: -1  // Start from beginning
                 });
 
                 hls.loadSource(url);
@@ -519,14 +540,33 @@
             if (index < 0 || index >= playlist.length) {
                 return;
             }
+
+            // Save current playback state
+            const wasPlaying = !video.paused;
+            const currentVolume = video.volume;
+
             currentIndex = index;
             const current = playlist[currentIndex];
             if (!current) {
                 return;
             }
+
+            // Set new source with optimizations
             video.src = `/stream/${current.file_id}`;
+
+            // Add canplaythrough listener for smoother transition
+            const onCanPlayThrough = () => {
+                video.volume = currentVolume;
+                if (wasPlaying) {
+                    video.play().catch(() => {});
+                }
+                video.removeEventListener('canplaythrough', onCanPlayThrough);
+            };
+            video.addEventListener('canplaythrough', onCanPlayThrough);
+
+            // Load immediately
             video.load();
-            video.play().catch(() => {});
+
             updatePartMeta();
 
             // Proactively prefetch next part when loading current part

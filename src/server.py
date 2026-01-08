@@ -594,13 +594,14 @@ async def stream_concat(short_id: str):
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
-            "-fflags", "+genpts",
+            "-fflags", "+genpts+igndts",  # Ignore DTS for smoother concat
             "-f", "concat",
             "-safe", "0",
             "-i", list_path,
             "-c", "copy",
             "-avoid_negative_ts", "make_zero",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "-max_muxing_queue_size", "9999",  # Prevent queue overflow
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof+faststart",  # Added faststart
             "-f", "mp4",
             "pipe:1"
         ]
@@ -615,8 +616,8 @@ async def stream_concat(short_id: str):
             async def iter_concat():
                 try:
                     while True:
-                        # Increased chunk size from 256KB to 512KB for better throughput
-                        chunk = await process.stdout.read(1024 * 512)
+                        # Increased chunk size to 1MB for maximum throughput and seamless streaming
+                        chunk = await process.stdout.read(1024 * 1024)
                         if not chunk:
                             break
                         yield chunk
@@ -2263,7 +2264,7 @@ async def update_video(
 # HLS (HTTP Live Streaming) Endpoints
 HLS_CACHE_DIR = Path("hls_cache")
 HLS_CACHE_DIR.mkdir(exist_ok=True)
-HLS_SEGMENT_DURATION = 6  # seconds per segment
+HLS_SEGMENT_DURATION = 2  # seconds per segment (shorter = faster start, smoother playback)
 
 
 async def generate_hls_for_video(short_id: str) -> Optional[Path]:
@@ -2370,6 +2371,10 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                 "-f", "hls",
                 "-hls_time", str(HLS_SEGMENT_DURATION),
                 "-hls_list_size", "0",  # Keep all segments in playlist
+                "-hls_flags", "independent_segments+delete_segments",  # Independent segments for better seeking
+                "-hls_segment_type", "mpegts",  # MPEG-TS for better compatibility
+                "-start_number", "0",
+                "-hls_playlist_type", "vod",  # VOD playlist type
                 "-hls_segment_filename", output_pattern,
                 playlist_path
             ]
