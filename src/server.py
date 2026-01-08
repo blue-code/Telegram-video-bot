@@ -2365,25 +2365,24 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
             output_pattern = str(hls_dir / "segment%03d.ts")
             playlist_path = str(hls_dir / "index.m3u8")
 
+            # fMP4 output pattern (m4s instead of ts)
+            output_pattern = str(hls_dir / "segment%03d.m4s")
+
             hls_cmd = [
                 "ffmpeg",
                 "-i", input_video,
-                # 재인코딩으로 확실한 호환성 보장 (느리지만 안정적)
-                "-c:v", "libx264",           # H.264 재인코딩
-                "-preset", "veryfast",       # 빠른 인코딩 (품질 약간 낮음)
-                "-crf", "23",                # 품질 (23 = 기본값)
-                "-c:a", "aac",               # AAC 재인코딩
-                "-b:a", "128k",              # 오디오 비트레이트
+                "-c:v", "copy",              # 비디오 코덱 복사 (재인코딩 없음)
+                "-c:a", "copy",              # 오디오 코덱 복사 (재인코딩 없음)
                 "-f", "hls",
                 "-hls_time", str(HLS_SEGMENT_DURATION),
                 "-hls_list_size", "0",
+                "-hls_segment_type", "fmp4",  # ★ fMP4 사용 (MPEG-TS 대신)
+                "-hls_fmp4_init_filename", "init.mp4",  # 초기화 세그먼트
                 "-hls_flags", "independent_segments",
-                "-hls_segment_type", "mpegts",
                 "-start_number", "0",
                 "-hls_playlist_type", "vod",
                 "-hls_segment_filename", output_pattern,
-                "-max_muxing_queue_size", "9999",
-                "-avoid_negative_ts", "make_zero",
+                "-movflags", "+faststart",   # MP4 최적화
                 playlist_path
             ]
 
@@ -2447,8 +2446,10 @@ async def serve_hls_file(request: Request, short_id: str, filename: str):
         # Determine media type
         if filename.endswith(".m3u8"):
             media_type = "application/vnd.apple.mpegurl"
+        elif filename.endswith(".m4s") or filename.endswith(".mp4"):
+            media_type = "video/mp4"  # fMP4 segments
         elif filename.endswith(".ts"):
-            media_type = "video/MP2T"
+            media_type = "video/MP2T"  # Legacy MPEG-TS (fallback)
         else:
             media_type = "application/octet-stream"
 
