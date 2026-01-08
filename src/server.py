@@ -2420,7 +2420,9 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                 ]
 
                 logger.info(f"⚙️ Starting HLS generation for {short_id}")
-                logger.info(f"   Command: {' '.join(hls_cmd[:10])}...")  # First 10 args only
+                logger.info(f"   Output dir: {hls_dir}")
+                logger.info(f"   Temp dir: {temp_dir}")
+                logger.info(f"   Full command: {' '.join(hls_cmd)}")
                 result = subprocess.run(hls_cmd, capture_output=True, text=True, timeout=300)
 
                 if result.returncode != 0:
@@ -2430,12 +2432,18 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                     return None
 
                 logger.info(f"✅ ffmpeg completed successfully")
+                if result.stderr:
+                    logger.info(f"   ffmpeg stderr (first 500 chars): {result.stderr[:500]}")
 
                 # Verify segments were created (fMP4 uses .m4s extension)
                 segments = list(hls_dir.glob("segment*.m4s"))
                 init_segment = hls_dir / "init.mp4"
+                all_files = list(hls_dir.glob("*"))
 
                 logger.info(f"   Checking for segments in {hls_dir}")
+                logger.info(f"   Directory exists: {hls_dir.exists()}")
+                logger.info(f"   Total files in directory: {len(all_files)}")
+                logger.info(f"   First 5 files: {[f.name for f in all_files[:5]]}")
                 logger.info(f"   init.mp4 exists: {init_segment.exists()}")
                 logger.info(f"   Found {len(segments)} .m4s segments")
 
