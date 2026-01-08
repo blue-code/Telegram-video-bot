@@ -3,12 +3,13 @@ const STATIC_CACHE = `${CACHE_VERSION}-static`;
 const DYNAMIC_CACHE = `${CACHE_VERSION}-dynamic`;
 const IMAGE_CACHE = `${CACHE_VERSION}-images`;
 
-// Static assets to cache on install
+// Static assets to cache on install (실제 정적 파일만)
 const STATIC_ASSETS = [
-  '/',
   '/static/manifest.json',
   '/static/offline.html',
-  'https://cdn.jsdelivr.net/npm/hls.js@latest'
+  '/static/icon-192.png',
+  '/static/icon-512.png',
+  '/static/pwa-install.js'
 ];
 
 // Cache size limits

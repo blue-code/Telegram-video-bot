@@ -2413,8 +2413,8 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
         return None
 
 
-@app.get("/api/hls/{short_id}/{filename}")
-async def serve_hls_file(short_id: str, filename: str):
+@app.api_route("/api/hls/{short_id}/{filename}", methods=["GET", "HEAD"])
+async def serve_hls_file(request: Request, short_id: str, filename: str):
     """Serve HLS playlist or segment files"""
     try:
         # Generate HLS if not exists
@@ -2435,6 +2435,19 @@ async def serve_hls_file(short_id: str, filename: str):
             media_type = "video/MP2T"
         else:
             media_type = "application/octet-stream"
+
+        # HEAD 요청은 헤더만 반환
+        if request.method == "HEAD":
+            return Response(
+                headers={
+                    "Content-Type": media_type,
+                    "Content-Length": str(file_path.stat().st_size),
+                    "Cache-Control": "public, max-age=3600",
+                    "Access-Control-Allow-Origin": "*",
+                    "Connection": "keep-alive",
+                    "Keep-Alive": "timeout=60, max=100"
+                }
+            )
 
         return FileResponse(
             file_path,
