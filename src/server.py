@@ -2276,20 +2276,29 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
     """
     from src.db import get_video_by_short_id
 
+    logger.info(f"🎬 HLS generation requested for {short_id}")
+
     try:
         # Check cache first
         hls_dir = HLS_CACHE_DIR / short_id
         master_playlist = hls_dir / "master.m3u8"
 
         if master_playlist.exists():
-            logger.info(f"HLS cache hit for {short_id}")
+            logger.info(f"✅ HLS cache hit for {short_id}")
+            # Verify segments exist
+            segments = list(hls_dir.glob("segment*.m4s"))
+            logger.info(f"   Found {len(segments)} cached segments")
             return hls_dir
+
+        logger.info(f"🔨 No cache found, generating HLS for {short_id}")
 
         # Get video info
         video = await get_video_by_short_id(short_id)
         if not video:
-            logger.error(f"Video not found: {short_id}")
+            logger.error(f"❌ Video not found in database: {short_id}")
             return None
+
+        logger.info(f"📹 Video found: {video.get('title', 'Unknown')}")
 
         # Create HLS directory
         hls_dir.mkdir(parents=True, exist_ok=True)
@@ -2386,22 +2395,33 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                 playlist_path
             ]
 
-            logger.info(f"Starting HLS generation for {short_id}: {' '.join(hls_cmd)}")
+            logger.info(f"⚙️ Starting HLS generation for {short_id}")
+            logger.info(f"   Command: {' '.join(hls_cmd[:10])}...")  # First 10 args only
             result = subprocess.run(hls_cmd, capture_output=True, text=True, timeout=300)
 
             if result.returncode != 0:
-                logger.error(f"HLS generation failed: {result.stderr}")
+                logger.error(f"❌ ffmpeg failed (return code {result.returncode})")
+                logger.error(f"   stderr: {result.stderr[:500]}")  # First 500 chars
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return None
 
-            # Verify segments were created
-            segments = list(hls_dir.glob("segment*.ts"))
+            logger.info(f"✅ ffmpeg completed successfully")
+
+            # Verify segments were created (fMP4 uses .m4s extension)
+            segments = list(hls_dir.glob("segment*.m4s"))
+            init_segment = hls_dir / "init.mp4"
+
+            logger.info(f"   Checking for segments in {hls_dir}")
+            logger.info(f"   init.mp4 exists: {init_segment.exists()}")
+            logger.info(f"   Found {len(segments)} .m4s segments")
+
             if not segments:
-                logger.error(f"No HLS segments generated for {short_id}")
+                logger.error(f"❌ No HLS segments generated for {short_id}")
+                logger.error(f"   Directory contents: {[f.name for f in hls_dir.glob('*')]}")
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return None
 
-            logger.info(f"Generated {len(segments)} HLS segments for {short_id}")
+            logger.info(f"✅ Generated {len(segments)} HLS segments for {short_id}")
 
             # Create master playlist
             with open(master_playlist, "w") as f:
