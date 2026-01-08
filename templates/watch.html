@@ -405,6 +405,16 @@
         function initHLS(url) {
             // Initialize HLS.js player for Adaptive Bitrate Streaming
             // Aggressively optimized to eliminate mid-playback buffering
+
+            // Debug: Check if HLS.js is loaded
+            if (typeof Hls === 'undefined') {
+                console.error('HLS.js library not loaded');
+                return false;
+            }
+
+            console.log('HLS.js loaded, isSupported:', Hls.isSupported());
+            console.log('MediaSource API:', typeof MediaSource !== 'undefined' ? 'Available' : 'Not available');
+
             if (Hls.isSupported()) {
                 hls = new Hls({
                     debug: false,
@@ -659,19 +669,22 @@
         }
         
         // Try HLS first for better adaptive streaming
+        console.log('Checking HLS availability:', hlsUrl);
         fetch(hlsUrl, { method: 'HEAD' })
             .then(response => {
+                console.log('HLS HEAD response:', response.status, response.ok);
                 if (response.ok) {
                     console.log('HLS manifest available, using HLS.js');
                     if (!initHLS(hlsUrl)) {
+                        console.warn('initHLS returned false, falling back');
                         fallbackToNativeStreaming();
                     }
                 } else {
-                    throw new Error('HLS not available');
+                    throw new Error(`HLS not available: ${response.status}`);
                 }
             })
-            .catch(() => {
-                console.log('HLS not available, using native streaming');
+            .catch(err => {
+                console.log('HLS not available, using native streaming:', err.message);
                 fallbackToNativeStreaming();
             });
 
