@@ -2367,26 +2367,42 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
 
             hls_cmd = [
                 "ffmpeg",
+                "-fflags", "+genpts+igndts",  # Generate timestamps, ignore DTS
                 "-i", input_video,
-                "-c:v", "copy",  # Copy video codec (fast)
-                "-c:a", "copy",  # Copy audio codec (fast)
+                "-c:v", "copy",
+                "-c:a", "copy",
+                # Bitstream filters for MP4 to MPEG-TS conversion
+                "-bsf:v", "h264_mp4toannexb",  # Convert H.264 from MP4 to Annex-B
+                "-bsf:a", "aac_adtstoasc",     # Convert AAC to ADTS
                 "-f", "hls",
                 "-hls_time", str(HLS_SEGMENT_DURATION),
-                "-hls_list_size", "0",  # Keep all segments in playlist
-                "-hls_flags", "independent_segments+delete_segments",  # Independent segments for better seeking
-                "-hls_segment_type", "mpegts",  # MPEG-TS for better compatibility
+                "-hls_list_size", "0",
+                "-hls_flags", "independent_segments",  # delete_segments 제거 (캐싱 위해)
+                "-hls_segment_type", "mpegts",
                 "-start_number", "0",
-                "-hls_playlist_type", "vod",  # VOD playlist type
+                "-hls_playlist_type", "vod",
                 "-hls_segment_filename", output_pattern,
+                "-max_muxing_queue_size", "9999",  # Queue overflow 방지
+                "-avoid_negative_ts", "make_zero",  # Negative timestamp 처리
                 playlist_path
             ]
 
+            logger.info(f"Starting HLS generation for {short_id}: {' '.join(hls_cmd)}")
             result = subprocess.run(hls_cmd, capture_output=True, text=True, timeout=300)
 
             if result.returncode != 0:
                 logger.error(f"HLS generation failed: {result.stderr}")
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return None
+
+            # Verify segments were created
+            segments = list(hls_dir.glob("segment*.ts"))
+            if not segments:
+                logger.error(f"No HLS segments generated for {short_id}")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return None
+
+            logger.info(f"Generated {len(segments)} HLS segments for {short_id}")
 
             # Create master playlist
             with open(master_playlist, "w") as f:
