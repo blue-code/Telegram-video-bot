@@ -20,6 +20,7 @@ from pathlib import Path
 import hashlib
 import time
 import re
+import traceback
 
 # Initialize
 load_dotenv()
@@ -2322,8 +2323,11 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
             metadata = video.get("metadata") or {}
             parts = metadata.get("parts") or []
 
+            logger.info(f"   Metadata parts: {len(parts)} parts detected")
+
             # For multi-part videos, concatenate first
             if parts and len(parts) > 1:
+                logger.info(f"   Processing multi-part video ({len(parts)} parts)")
                 # Download and concatenate parts
                 file_ids = [p.get("file_id") for p in sorted(parts, key=lambda x: x.get("part", 0))]
                 download_urls = await asyncio.gather(
@@ -2363,12 +2367,15 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                     return None
             else:
                 # Single file - download it
+                logger.info(f"   Processing single video file")
                 file_id = video.get("file_id")
                 if not file_id:
-                    logger.error(f"No file_id for video {short_id}")
+                    logger.error(f"❌ No file_id for video {short_id}")
                     return None
 
+                logger.info(f"   Getting download URL for file_id: {file_id[:20]}...")
                 download_url = await get_file_path_from_telegram(file_id)
+                logger.info(f"   Download URL obtained, starting download...")
                 temp_dir = tempfile.mkdtemp()
 
                 try:
@@ -2379,8 +2386,10 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                             with open(input_video, "wb") as f:
                                 async for chunk in r.aiter_bytes(chunk_size=CHUNK_SIZE_LARGE):
                                     f.write(chunk)
+                    logger.info(f"   Video download completed: {os.path.getsize(input_video)} bytes")
                 except Exception as e:
-                    logger.error(f"Video download failed: {e}")
+                    logger.error(f"❌ Video download failed: {type(e).__name__}: {e}")
+                    logger.error(f"   Traceback:\n{traceback.format_exc()}")
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     return None
 
@@ -2459,7 +2468,9 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                 return None
 
         except Exception as e:
-            logger.error(f"HLS generation failed for {short_id}: {e}")
+            logger.error(f"❌ HLS generation failed for {short_id}")
+            logger.error(f"   Exception: {type(e).__name__}: {str(e)}")
+            logger.error(f"   Traceback:\n{traceback.format_exc()}")
             return None
 
 
