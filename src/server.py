@@ -2367,23 +2367,23 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
 
             hls_cmd = [
                 "ffmpeg",
-                "-fflags", "+genpts+igndts",  # Generate timestamps, ignore DTS
                 "-i", input_video,
-                "-c:v", "copy",
-                "-c:a", "copy",
-                # Bitstream filters for MP4 to MPEG-TS conversion
-                "-bsf:v", "h264_mp4toannexb",  # Convert H.264 from MP4 to Annex-B
-                "-bsf:a", "aac_adtstoasc",     # Convert AAC to ADTS
+                # 재인코딩으로 확실한 호환성 보장 (느리지만 안정적)
+                "-c:v", "libx264",           # H.264 재인코딩
+                "-preset", "veryfast",       # 빠른 인코딩 (품질 약간 낮음)
+                "-crf", "23",                # 품질 (23 = 기본값)
+                "-c:a", "aac",               # AAC 재인코딩
+                "-b:a", "128k",              # 오디오 비트레이트
                 "-f", "hls",
                 "-hls_time", str(HLS_SEGMENT_DURATION),
                 "-hls_list_size", "0",
-                "-hls_flags", "independent_segments",  # delete_segments 제거 (캐싱 위해)
+                "-hls_flags", "independent_segments",
                 "-hls_segment_type", "mpegts",
                 "-start_number", "0",
                 "-hls_playlist_type", "vod",
                 "-hls_segment_filename", output_pattern,
-                "-max_muxing_queue_size", "9999",  # Queue overflow 방지
-                "-avoid_negative_ts", "make_zero",  # Negative timestamp 처리
+                "-max_muxing_queue_size", "9999",
+                "-avoid_negative_ts", "make_zero",
                 playlist_path
             ]
 
