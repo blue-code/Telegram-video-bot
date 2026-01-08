@@ -403,32 +403,50 @@
 
         function initHLS(url) {
             // Initialize HLS.js player for Adaptive Bitrate Streaming
-            // Optimized for seamless playback with aggressive buffering
+            // Aggressively optimized to eliminate mid-playback buffering
             if (Hls.isSupported()) {
                 hls = new Hls({
                     debug: false,
                     enableWorker: true,
                     lowLatencyMode: false,
 
-                    // Buffer settings - aggressive for seamless playback
+                    // Buffer settings - EXTREMELY aggressive for zero buffering
                     backBufferLength: 90,
-                    maxBufferLength: 60,  // Increased from 30 to 60 seconds
-                    maxMaxBufferLength: 120,  // Maximum buffer length
-                    maxBufferSize: 150 * 1000 * 1000, // Increased from 60MB to 150MB
-                    maxBufferHole: 0.3,  // Reduced from 0.5 for tighter gap handling
+                    maxBufferLength: 60,
+                    maxMaxBufferLength: 120,
+                    maxBufferSize: 200 * 1000 * 1000, // Increased to 200MB
+                    maxBufferHole: 0.2,  // Even tighter gap handling
 
-                    // Fragment loading optimization
-                    maxFragLookUpTolerance: 0.1,  // Reduced for precise seeking
-                    highBufferWatchdogPeriod: 1,  // More frequent monitoring
-                    nudgeOffset: 0.05,  // Smaller nudge for smoother playback
-                    nudgeMaxRetry: 5,  // More retries
+                    // Adaptive Bitrate - Optimistic bandwidth estimation
+                    abrEwmaDefaultEstimate: 5000000,  // 5Mbps initial estimate (high)
+                    abrBandWidthFactor: 0.8,  // 80% safety margin (was 0.95)
+                    abrBandWidthUpFactor: 0.5,  // Faster quality increase
+                    abrEwmaFastLive: 3.0,
+                    abrEwmaSlowLive: 9.0,
+                    abrMaxWithRealBitrate: true,
 
-                    // Streaming optimization
-                    maxLoadingDelay: 2,  // Faster segment loading
-                    maxStarvationDelay: 2,  // Faster recovery from starvation
+                    // Fragment loading - Aggressive prefetch
+                    maxFragLookUpTolerance: 0.1,
+                    highBufferWatchdogPeriod: 0.5,  // Check every 0.5s (was 1s)
+                    nudgeOffset: 0.05,
+                    nudgeMaxRetry: 5,
+
+                    // Loading optimization - Prevent stalls
+                    maxLoadingDelay: 1,  // Even faster (was 2)
+                    maxStarvationDelay: 1,  // Immediate recovery (was 2)
                     manifestLoadingTimeOut: 10000,
-                    manifestLoadingMaxRetry: 3,
-                    manifestLoadingRetryDelay: 500,
+                    manifestLoadingMaxRetry: 5,  // More retries
+                    manifestLoadingRetryDelay: 300,  // Faster retry
+                    levelLoadingTimeOut: 10000,
+                    levelLoadingMaxRetry: 5,
+                    levelLoadingRetryDelay: 300,
+                    fragLoadingTimeOut: 20000,  // 20s timeout for fragments
+                    fragLoadingMaxRetry: 6,  // More retries for fragments
+                    fragLoadingRetryDelay: 300,
+
+                    // Initial buffer - Build more buffer before starting
+                    startFragPrefetch: true,  // Prefetch first segment
+                    testBandwidth: false,  // Skip bandwidth test for faster start
 
                     // Live streaming (not used but kept for compatibility)
                     liveSyncDurationCount: 3,
@@ -437,10 +455,8 @@
 
                     // Performance
                     preferManagedMediaSource: false,
-                    progressive: true,  // Enable progressive loading
-
-                    // Start position
-                    startPosition: -1  // Start from beginning
+                    progressive: true,
+                    startPosition: -1
                 });
 
                 hls.loadSource(url);
@@ -451,12 +467,40 @@
                     video.play().catch(e => console.log('Auto-play prevented:', e));
                 });
 
+                // Buffer monitoring for aggressive recovery
+                let bufferStallCount = 0;
+                let lastBufferedTime = 0;
+
+                hls.on(Hls.Events.FRAG_BUFFERED, function(event, data) {
+                    // Reset stall counter on successful buffer
+                    bufferStallCount = 0;
+                    lastBufferedTime = Date.now();
+                    console.log('Fragment buffered successfully:', data.frag.sn);
+                });
+
+                hls.on(Hls.Events.BUFFER_APPENDING, function(event, data) {
+                    // Monitor buffer appending
+                    console.log('Buffer appending...', data.type);
+                });
+
                 hls.on(Hls.Events.ERROR, function(event, data) {
+                    console.warn('HLS Error:', data);
+
                     if (data.fatal) {
                         switch(data.type) {
                             case Hls.ErrorTypes.NETWORK_ERROR:
                                 console.error('Fatal network error, trying to recover...');
-                                hls.startLoad();
+                                bufferStallCount++;
+
+                                if (bufferStallCount < 3) {
+                                    // Immediate retry
+                                    setTimeout(() => {
+                                        hls.startLoad();
+                                    }, 100);
+                                } else {
+                                    // Too many stalls, fallback
+                                    fallbackToNativeStreaming();
+                                }
                                 break;
                             case Hls.ErrorTypes.MEDIA_ERROR:
                                 console.error('Fatal media error, trying to recover...');
@@ -465,10 +509,48 @@
                             default:
                                 console.error('Fatal error, cannot recover:', data);
                                 hls.destroy();
-                                // Fallback to native streaming
                                 fallbackToNativeStreaming();
                                 break;
                         }
+                    } else {
+                        // Non-fatal error - try to recover anyway
+                        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                            console.log('Non-fatal network error, preemptive recovery');
+                            setTimeout(() => {
+                                if (hls && hls.media && hls.media.paused) {
+                                    hls.startLoad();
+                                }
+                            }, 500);
+                        }
+                    }
+                });
+
+                // Aggressive stall detection and recovery
+                let stallTimer = null;
+                video.addEventListener('waiting', function() {
+                    console.log('Video waiting (buffering)...');
+
+                    // If waiting too long, force reload
+                    stallTimer = setTimeout(() => {
+                        console.warn('Buffer stall detected, forcing reload...');
+                        if (hls) {
+                            const currentTime = video.currentTime;
+                            hls.startLoad(currentTime);
+                        }
+                    }, 3000);  // 3 seconds timeout
+                });
+
+                video.addEventListener('playing', function() {
+                    if (stallTimer) {
+                        clearTimeout(stallTimer);
+                        stallTimer = null;
+                    }
+                });
+
+                video.addEventListener('stalled', function() {
+                    console.warn('Network stalled, forcing buffer recovery...');
+                    if (hls) {
+                        hls.startLoad();
                     }
                 });
 

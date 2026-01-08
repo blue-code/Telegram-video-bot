@@ -417,11 +417,13 @@ async def stream_video(
         if range and file_size:
             range_tuple = parse_range_header(range, file_size)
 
-        # Prepare headers
+        # Prepare headers with Keep-Alive for connection reuse
         headers = {
             "Accept-Ranges": "bytes",
             "ETag": etag,
             "Cache-Control": "public, max-age=3600",
+            "Connection": "keep-alive",
+            "Keep-Alive": "timeout=60, max=100",  # Keep connection alive for 60s, max 100 requests
         }
         
         # Handle Range request
@@ -2439,7 +2441,9 @@ async def serve_hls_file(short_id: str, filename: str):
             media_type=media_type,
             headers={
                 "Cache-Control": "public, max-age=3600",
-                "Access-Control-Allow-Origin": "*"
+                "Access-Control-Allow-Origin": "*",
+                "Connection": "keep-alive",
+                "Keep-Alive": "timeout=60, max=100"
             }
         )
 
