@@ -229,21 +229,44 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         # Single video handling (existing logic)
-        # Filter formats to show useful options (e.g., mp4 with height)
-        seen_heights = set()
+        # Offer predefined quality options (yt-dlp will merge video+audio automatically)
         buttons = []
-        
+
+        # Get available heights from formats (including video-only formats)
+        available_heights = set()
         for f in info.get('formats', []):
             h = f.get('height')
-            if h and h not in seen_heights and f.get('ext') == 'mp4':
-                seen_heights.add(h)
+            if h:
+                available_heights.add(h)
+
+        # Predefined quality options (from highest to lowest)
+        quality_options = [
+            (2160, "4K (2160p)"),
+            (1440, "2K (1440p)"),
+            (1080, "Full HD (1080p)"),
+            (720, "HD (720p)"),
+            (480, "SD (480p)"),
+            (360, "저화질 (360p)"),
+        ]
+
+        # Show only available qualities
+        for height, label in quality_options:
+            # Check if this quality or higher is available
+            if any(h >= height for h in available_heights):
                 buttons.append([InlineKeyboardButton(
-                    f"{h}p (MP4)", 
-                    callback_data=f"dl|{info['id']}|{f['format_id']}|{h}"
+                    f"📹 {label}",
+                    callback_data=f"dl|{info['id']}|best|{height}"
                 )])
-        
+
+        # If no predefined options available, show best available
+        if not buttons:
+            buttons.append([InlineKeyboardButton(
+                "📹 최고 화질",
+                callback_data=f"dl|{info['id']}|best|best"
+            )])
+
         # Add MP3 option
-        buttons.append([InlineKeyboardButton("Audio only (MP3) 🎵", callback_data=f"dl|{info['id']}|bestaudio|mp3")])
+        buttons.append([InlineKeyboardButton("🎵 Audio only (MP3)", callback_data=f"dl|{info['id']}|bestaudio|mp3")])
         
         reply_markup = InlineKeyboardMarkup(buttons)
         
@@ -387,7 +410,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 
                 # Download and upload (reuse existing logic)
                 os.makedirs("downloads", exist_ok=True)
-                file_path = await download_video(video_url, format_id, "downloads")
+                file_path = await download_video(video_url, format_id, "downloads", quality=quality)
                 
                 if os.path.exists(file_path):
                     parts = await split_video(file_path, MAX_FILE_SIZE)
@@ -565,10 +588,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # 1. Download
             os.makedirs("downloads", exist_ok=True)
             file_path = await download_video(
-                url, 
-                format_id, 
-                "downloads", 
-                progress_hook=progress_hook
+                url,
+                format_id,
+                "downloads",
+                progress_hook=progress_hook,
+                quality=quality
             )
             
             logging.info(f"Downloaded file: {file_path}")

@@ -66,17 +66,36 @@ async def extract_video_info(url: str):
             'webpage_url': info.get('webpage_url')
         }
 
-async def download_video(url: str, format_id: str, output_path: str, progress_hook=None):
+async def download_video(url: str, format_id: str, output_path: str, progress_hook=None, quality: str = None):
     """
     Asynchronously downloads a video with a specific format.
+
+    Args:
+        url: Video URL
+        format_id: Format selector ('best', 'bestaudio', or specific format ID)
+        output_path: Download directory
+        progress_hook: Progress callback function
+        quality: Target height (e.g., '1080', '720') or 'best' for highest quality
     """
+    # Determine format string based on quality
+    if format_id == 'bestaudio':
+        format_str = 'bestaudio/best'
+    elif quality and quality != 'best' and quality.isdigit():
+        # Height-based quality selection: merge best video (up to height) + best audio
+        height = int(quality)
+        format_str = f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best'
+    else:
+        # Best available quality
+        format_str = 'bestvideo+bestaudio/best'
+
     ydl_opts = {
-        'format': f"{format_id}+bestvideo/best" if format_id != 'bestaudio' else 'bestaudio/best',
+        'format': format_str,
         'outtmpl': f"{output_path}/%(id)s.%(ext)s",
         'quiet': False, # Debugging: show what's happening
         'no_warnings': False,
         'progress_hooks': [progress_hook] if progress_hook else [],
         'restrictedfilenames': True,
+        'merge_output_format': 'mp4',  # Merge video+audio into MP4
         # YouTube 403 Forbidden 우회
         'extractor_args': {
             'youtube': {
@@ -92,7 +111,7 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         },
         'nocheckcertificate': True,
     }
-    
+
     if format_id == 'bestaudio':
         ydl_opts['postprocessors'] = [{
             'key': 'FFmpegExtractAudio',
