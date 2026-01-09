@@ -585,24 +585,29 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             nonlocal last_update_time
             if d['status'] == 'downloading':
                 current_time = time.time()
-                if current_time - last_update_time > 3: # Update every 3s
-                    p = d.get('downloaded_bytes', 0) / d.get('total_bytes', 1) * 100
-                    p_str = f"{p:.1f}%"
-                    speed = d.get('_speed_str', 'N/A')
-                    eta = d.get('_eta_str', 'N/A')
-                    bar = get_progress_bar(p)
-                    
-                    text = (
-                        f"**영상 다운로드 중...** ⬇️\n\n"
-                        f"진행률: `{bar}` {p_str}\n"
-                        f"속도: {speed} | 남은 시간: {eta}"
-                    )
-                    
-                    asyncio.run_coroutine_threadsafe(
-                        status_message.edit_text(text, parse_mode='Markdown'),
-                        loop
-                    )
-                    last_update_time = current_time
+                # Update every 5 seconds or if it's the first/last update
+                if current_time - last_update_time > 5 or d.get('downloaded_bytes') == d.get('total_bytes'):
+                    try:
+                        p = d.get('downloaded_bytes', 0) / (d.get('total_bytes') or d.get('total_bytes_estimate') or 1) * 100
+                        p_str = f"{p:.1f}%"
+                        speed = d.get('_speed_str', 'N/A')
+                        eta = d.get('_eta_str', 'N/A')
+                        bar = get_progress_bar(p)
+                        
+                        text = (
+                            f"**영상 다운로드 중...** ⬇️\n\n"
+                            f"진행률: `{bar}` {p_str}\n"
+                            f"속도: {speed} | 남은 시간: {eta}"
+                        )
+                        
+                        asyncio.run_coroutine_threadsafe(
+                            status_message.edit_text(text, parse_mode='Markdown'),
+                            loop
+                        )
+                        last_update_time = current_time
+                    except Exception as e:
+                        # Ignore errors like "Message is not modified" or network issues during update
+                        logging.warning(f"Failed to update progress message: {e}")
 
         try:
             # 1. Download
