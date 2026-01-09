@@ -13,6 +13,20 @@ async def extract_video_info(url: str):
         'quiet': True,
         'no_warnings': True,
         'extract_flat': 'in_playlist',  # For playlists, just get metadata
+        # YouTube 403 Forbidden 우회
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'skip': ['dash', 'hls'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
+        'nocheckcertificate': True,
     }
 
     # Run blocking yt_dlp call in a separate thread
@@ -63,6 +77,20 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         'no_warnings': False,
         'progress_hooks': [progress_hook] if progress_hook else [],
         'restrictedfilenames': True,
+        # YouTube 403 Forbidden 우회
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'skip': ['dash', 'hls'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
+        'nocheckcertificate': True,
     }
     
     if format_id == 'bestaudio':
