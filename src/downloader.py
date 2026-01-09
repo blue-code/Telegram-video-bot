@@ -89,12 +89,12 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
     if format_id == 'bestaudio':
         format_str = 'bestaudio/best'
     elif quality and quality != 'best' and quality.isdigit():
-        # Height-based quality selection: merge best video (up to height) + best audio
+        # Height-based quality selection: prefer HLS > DASH (to avoid 403) > Fallback
         height = int(quality)
-        format_str = f'bestvideo[height<={height}]+bestaudio/best[height<={height}]/best'
+        format_str = f'bestvideo[height<={height}][protocol^=m3u8]+bestaudio/best[height<={height}][protocol^=m3u8]/bestvideo[height<={height}]+bestaudio/best[height<={height}]/best'
     else:
-        # Best available quality
-        format_str = 'bestvideo+bestaudio/best'
+        # Best available quality: prefer HLS > DASH (to avoid 403) > Fallback
+        format_str = 'bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/bestvideo+bestaudio/best'
 
     ydl_opts = {
         'format': format_str,
@@ -104,11 +104,6 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         'progress_hooks': [progress_hook] if progress_hook else [],
         'restrictedfilenames': True,
         'merge_output_format': 'mp4',  # Merge video+audio into MP4
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android_creator'],
-            }
-        },
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',

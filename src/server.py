@@ -1319,11 +1319,14 @@ async def web_download(
 
         is_audio = str(quality).lower() in {"audio", "bestaudio"}
         if is_audio:
-            format_spec = "bestaudio"
+            format_spec = "bestaudio/best"
         elif str(quality).isdigit():
-            format_spec = f"bestvideo[height<={quality}]+bestaudio/best"
+            # Height based with HLS priority
+            h = int(quality)
+            format_spec = f"bestvideo[height<={h}][protocol^=m3u8]+bestaudio/best[height<={h}][protocol^=m3u8]/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
         else:
-            format_spec = "bestvideo+bestaudio/best"
+            # Best quality with HLS priority
+            format_spec = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/bestvideo+bestaudio/best"
 
         ydl_opts = {
             'format': format_spec,
@@ -1331,12 +1334,6 @@ async def web_download(
             'quiet': False,
             'no_warnings': False,
             'progress_hooks': [progress_hook],
-            # YouTube 403 Forbidden 우회
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android_creator'],
-                }
-            },
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
