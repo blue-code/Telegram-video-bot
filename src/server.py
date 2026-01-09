@@ -2555,10 +2555,13 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
 
             # Generate HLS segments
             try:
-                # fMP4 파일 경로 (전체 경로 지정)
+                # fMP4 파일 경로
                 output_pattern = str(hls_dir / "segment%03d.m4s")
                 playlist_path = str(hls_dir / "index.m3u8")
-                init_segment = str(hls_dir / "init.mp4")  # 초기화 세그먼트 전체 경로
+
+                # ★ init.mp4는 파일명만 지정 (플레이리스트에 상대 경로로 기록)
+                # ffmpeg가 자동으로 segment_filename과 같은 디렉토리에 생성
+                init_segment_name = "init.mp4"
 
                 # ★ 부분 처리 시 EVENT, 전체 처리 시 VOD
                 playlist_type = "event" if is_partial else "vod"
@@ -2573,7 +2576,7 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                     "-hls_time", str(HLS_SEGMENT_DURATION),
                     "-hls_list_size", "0",
                     "-hls_segment_type", "fmp4",  # ★ fMP4 사용 (MPEG-TS 대신)
-                    "-hls_fmp4_init_filename", init_segment,  # 초기화 세그먼트 (전체 경로)
+                    "-hls_fmp4_init_filename", init_segment_name,  # ★ 파일명만 지정!
                     "-hls_flags", "independent_segments",
                     "-start_number", "0",
                     "-hls_playlist_type", playlist_type,  # ★ 조건부 playlist type
