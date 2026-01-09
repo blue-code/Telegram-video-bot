@@ -2268,9 +2268,151 @@ async def update_video(
 HLS_CACHE_DIR = Path("hls_cache")
 HLS_CACHE_DIR.mkdir(exist_ok=True)
 HLS_SEGMENT_DURATION = 2  # seconds per segment (shorter = faster start, smoother playback)
+INITIAL_PART_COUNT = 5  # 첫 번째로 처리할 파트 개수 (빠른 재생 시작용)
 
 # Lock dictionary to prevent concurrent HLS generation for the same video
 hls_generation_locks = {}
+
+# Background task tracking
+background_tasks = {}
+
+
+async def extend_hls_in_background(short_id: str, initial_parts: list, all_parts: list, hls_dir: Path, video: dict):
+    """
+    백그라운드에서 나머지 파트를 처리하여 HLS를 확장합니다.
+
+    Args:
+        short_id: 비디오 short ID
+        initial_parts: 이미 처리된 초기 파트 리스트
+        all_parts: 전체 파트 리스트
+        hls_dir: HLS 디렉토리 경로
+        video: 비디오 정보 dict
+    """
+    try:
+        logger.info(f"🔄 Background HLS extension started for {short_id}")
+
+        # 나머지 파트 추출
+        remaining_parts = all_parts[len(initial_parts):]
+        if not remaining_parts:
+            logger.info(f"   No remaining parts to process for {short_id}")
+            return
+
+        logger.info(f"   Processing {len(remaining_parts)} remaining parts")
+
+        # 나머지 파트의 file_ids 추출
+        file_ids = [p.get("file_id") for p in sorted(remaining_parts, key=lambda x: x.get("part", 0))]
+        download_urls = await asyncio.gather(
+            *[get_file_path_from_telegram(fid) for fid in file_ids if fid]
+        )
+
+        # 임시 디렉토리에 다운로드
+        temp_dir = tempfile.mkdtemp()
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0)) as client:
+                part_files = []
+                for idx, url in enumerate(download_urls, len(initial_parts) + 1):
+                    part_path = os.path.join(temp_dir, f"part_{idx}.mp4")
+                    async with client.stream("GET", url) as r:
+                        r.raise_for_status()
+                        with open(part_path, "wb") as f:
+                            async for chunk in r.aiter_bytes(chunk_size=CHUNK_SIZE_LARGE):
+                                f.write(chunk)
+                    part_files.append(part_path)
+
+                logger.info(f"   Downloaded {len(part_files)} additional parts")
+
+                # 추가 파트 concat
+                concat_list = os.path.join(temp_dir, "remaining.txt")
+                with open(concat_list, "w") as f:
+                    for pf in part_files:
+                        f.write(f"file '{pf}'\n")
+
+                remaining_video = os.path.join(temp_dir, "remaining.mp4")
+                concat_cmd = [
+                    "ffmpeg", "-f", "concat", "-safe", "0",
+                    "-i", concat_list, "-c", "copy", remaining_video
+                ]
+                subprocess.run(concat_cmd, check=True, capture_output=True)
+
+                # 기존 세그먼트 개수 확인
+                existing_segments = sorted(hls_dir.glob("segment*.m4s"))
+                start_number = len(existing_segments)
+
+                logger.info(f"   Starting segment generation from #{start_number}")
+
+                # 추가 HLS 세그먼트 생성
+                output_pattern = str(hls_dir / f"segment%03d.m4s")
+                temp_playlist = str(hls_dir / "temp.m3u8")
+
+                hls_cmd = [
+                    "ffmpeg",
+                    "-i", remaining_video,
+                    "-c:v", "copy",
+                    "-c:a", "copy",
+                    "-f", "hls",
+                    "-hls_time", str(HLS_SEGMENT_DURATION),
+                    "-hls_list_size", "0",
+                    "-hls_segment_type", "fmp4",
+                    "-hls_flags", "independent_segments",
+                    "-start_number", str(start_number),
+                    "-hls_playlist_type", "vod",
+                    "-hls_segment_filename", output_pattern,
+                    "-movflags", "+faststart",
+                    temp_playlist
+                ]
+
+                result = subprocess.run(hls_cmd, capture_output=True, text=True, timeout=300)
+
+                if result.returncode != 0:
+                    logger.error(f"❌ Background HLS extension failed: {result.stderr[:500]}")
+                    return
+
+                # temp playlist에서 새 세그먼트 정보 추출하여 기존 playlist에 추가
+                with open(temp_playlist, "r") as f:
+                    temp_content = f.read()
+
+                # index.m3u8 업데이트
+                index_playlist = hls_dir / "index.m3u8"
+                with open(index_playlist, "r") as f:
+                    original_content = f.read()
+
+                # EVENT 타입을 VOD로 변경하고 새 세그먼트 추가
+                updated_content = original_content.replace("#EXT-X-PLAYLIST-TYPE:EVENT", "#EXT-X-PLAYLIST-TYPE:VOD")
+
+                # 기존 #EXT-X-ENDLIST 제거 (있다면)
+                updated_content = updated_content.replace("#EXT-X-ENDLIST\n", "")
+
+                # 새 세그먼트 추가 (temp playlist에서 추출)
+                temp_lines = temp_content.split("\n")
+                for i, line in enumerate(temp_lines):
+                    if line.startswith("#EXTINF:") or line.startswith("segment"):
+                        updated_content += line + "\n"
+
+                # #EXT-X-ENDLIST 추가
+                if not updated_content.endswith("#EXT-X-ENDLIST\n"):
+                    updated_content += "#EXT-X-ENDLIST\n"
+
+                with open(index_playlist, "w") as f:
+                    f.write(updated_content)
+
+                # temp playlist 삭제
+                os.remove(temp_playlist)
+
+                new_segment_count = len(list(hls_dir.glob("segment*.m4s")))
+                logger.info(f"✅ Background HLS extension completed for {short_id}")
+                logger.info(f"   Total segments: {new_segment_count}")
+
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    except Exception as e:
+        logger.error(f"❌ Background HLS extension failed for {short_id}")
+        logger.error(f"   Exception: {type(e).__name__}: {str(e)}")
+        logger.error(f"   Traceback:\n{traceback.format_exc()}")
+    finally:
+        # 백그라운드 태스크 추적에서 제거
+        if short_id in background_tasks:
+            del background_tasks[short_id]
 
 
 async def generate_hls_for_video(short_id: str) -> Optional[Path]:
@@ -2325,11 +2467,29 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
 
             logger.info(f"   Metadata parts: {len(parts)} parts detected")
 
+            # Initialize variables for partial processing
+            is_partial = False
+            sorted_parts = None
+            parts_to_process = None
+
             # For multi-part videos, concatenate first
             if parts and len(parts) > 1:
                 logger.info(f"   Processing multi-part video ({len(parts)} parts)")
-                # Download and concatenate parts
-                file_ids = [p.get("file_id") for p in sorted(parts, key=lambda x: x.get("part", 0))]
+
+                # Sort all parts
+                sorted_parts = sorted(parts, key=lambda x: x.get("part", 0))
+
+                # ★ 부분 처리 로직: 처음 5개 파트만 우선 처리
+                is_partial = len(sorted_parts) > INITIAL_PART_COUNT
+                parts_to_process = sorted_parts[:INITIAL_PART_COUNT] if is_partial else sorted_parts
+
+                if is_partial:
+                    logger.info(f"   ⚡ Quick start mode: Processing first {len(parts_to_process)} parts (total {len(sorted_parts)})")
+                else:
+                    logger.info(f"   Processing all {len(parts_to_process)} parts")
+
+                # Download and concatenate initial parts
+                file_ids = [p.get("file_id") for p in parts_to_process]
                 download_urls = await asyncio.gather(
                     *[get_file_path_from_telegram(fid) for fid in file_ids if fid]
                 )
@@ -2400,6 +2560,10 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                 playlist_path = str(hls_dir / "index.m3u8")
                 init_segment = str(hls_dir / "init.mp4")  # 초기화 세그먼트 전체 경로
 
+                # ★ 부분 처리 시 EVENT, 전체 처리 시 VOD
+                playlist_type = "event" if is_partial else "vod"
+                logger.info(f"   Using playlist type: {playlist_type} (partial={is_partial})")
+
                 hls_cmd = [
                     "ffmpeg",
                     "-i", input_video,
@@ -2412,7 +2576,7 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                     "-hls_fmp4_init_filename", init_segment,  # 초기화 세그먼트 (전체 경로)
                     "-hls_flags", "independent_segments",
                     "-start_number", "0",
-                    "-hls_playlist_type", "vod",
+                    "-hls_playlist_type", playlist_type,  # ★ 조건부 playlist type
                     "-hls_segment_filename", output_pattern,
                     "-movflags", "+faststart",   # MP4 최적화
                     playlist_path
@@ -2463,6 +2627,22 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
 
                 logger.info(f"HLS generated successfully for {short_id}")
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+                # ★ 부분 처리인 경우 백그라운드에서 나머지 확장
+                if is_partial and sorted_parts and parts_to_process:
+                    logger.info(f"🔄 Launching background task to extend HLS with remaining parts")
+                    task = asyncio.create_task(
+                        extend_hls_in_background(
+                            short_id=short_id,
+                            initial_parts=parts_to_process,
+                            all_parts=sorted_parts,
+                            hls_dir=hls_dir,
+                            video=video
+                        )
+                    )
+                    background_tasks[short_id] = task
+                    logger.info(f"✅ Background task launched for {short_id}")
+
                 return hls_dir
 
             except subprocess.TimeoutExpired:
