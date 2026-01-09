@@ -16,7 +16,6 @@ async def extract_video_info(url: str):
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'web'],
-                'skip': ['dash', 'hls'],
             }
         },
         'http_headers': {
@@ -114,7 +113,6 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'web'],
-                'skip': ['dash', 'hls'],
             }
         },
         'http_headers': {
