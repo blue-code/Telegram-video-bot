@@ -28,6 +28,18 @@ logging.basicConfig(
     level=logging.INFO
 )
 
+# Markdown escape function for Telegram
+def escape_markdown(text: str) -> str:
+    """Escape special characters for Telegram Markdown."""
+    if not text:
+        return ""
+    # Escape characters: _ * [ ] ( ) ~ ` > # + - = | { } . !
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    escaped_text = str(text)
+    for char in special_chars:
+        escaped_text = escaped_text.replace(char, '\\' + char)
+    return escaped_text
+
 # Telegram Bot API limit for regular bots is 50MB.
 # We set it to 30MB to accommodate VBR spikes and keyframe alignment issues.
 MAX_FILE_SIZE = 30 * 1024 * 1024 # 30MB (Safety buffer for 50MB limit)
@@ -208,8 +220,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await status_message.edit_text(
                 f"🎬 **플레이리스트 감지됨!**\n\n"
-                f"**{playlist_title}**\n"
-                f"총 **{video_count}**개의 영상이 있습니다.\n\n"
+                f"**{escape_markdown(playlist_title)}**\n"
+                f"총 **{video_count}**개의 영상이 있습니다\\.\n\n"
                 f"아래에서 원하는 옵션을 선택해 주세요!",
                 reply_markup=reply_markup,
                 parse_mode='Markdown'
@@ -244,7 +256,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         
         await status_message.edit_text(
-            f"**{info['title']}**\n\n"
+            f"**{escape_markdown(info['title'])}**\n\n"
             f"영상을 찾았어요! 원하시는 화질을 선택해 주세요! ⬇️",
             reply_markup=reply_markup,
             parse_mode='Markdown'
@@ -355,9 +367,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, entry in enumerate(entries):
             try:
                 await status_message.edit_text(
-                    f"🎬 **{playlist_title}**\n\n"
-                    f"진행 중: [{i+1}/{total}] {entry['title'][:30]}...\n"
-                    f"✅ 성공: {success_count} | ❌ 실패: {fail_count}",
+                    f"🎬 **{escape_markdown(playlist_title)}**\n\n"
+                    f"진행 중: \\[{i+1}/{total}\\] {escape_markdown(entry['title'][:30])}\\.\\.\\.\n"
+                    f"✅ 성공: {success_count} \\| ❌ 실패: {fail_count}",
                     parse_mode='Markdown'
                 )
                 
