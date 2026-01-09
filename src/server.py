@@ -2555,13 +2555,10 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
 
             # Generate HLS segments
             try:
-                # fMP4 파일 경로
+                # fMP4 파일 경로 (전체 경로 지정)
                 output_pattern = str(hls_dir / "segment%03d.m4s")
                 playlist_path = str(hls_dir / "index.m3u8")
-
-                # ★ init.mp4는 파일명만 지정 (플레이리스트에 상대 경로로 기록)
-                # ffmpeg가 자동으로 segment_filename과 같은 디렉토리에 생성
-                init_segment_name = "init.mp4"
+                init_segment_path = str(hls_dir / "init.mp4")  # ★ 전체 경로로 지정!
 
                 # ★ 부분 처리 시 EVENT, 전체 처리 시 VOD
                 playlist_type = "event" if is_partial else "vod"
@@ -2576,7 +2573,7 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                     "-hls_time", str(HLS_SEGMENT_DURATION),
                     "-hls_list_size", "0",
                     "-hls_segment_type", "fmp4",  # ★ fMP4 사용 (MPEG-TS 대신)
-                    "-hls_fmp4_init_filename", init_segment_name,  # ★ 파일명만 지정!
+                    "-hls_fmp4_init_filename", init_segment_path,  # ★ 전체 경로로 지정!
                     "-hls_flags", "independent_segments",
                     "-start_number", "0",
                     "-hls_playlist_type", playlist_type,  # ★ 조건부 playlist type
@@ -2620,6 +2617,22 @@ async def generate_hls_for_video(short_id: str) -> Optional[Path]:
                     return None
 
                 logger.info(f"✅ Generated {len(segments)} HLS segments for {short_id}")
+
+                # ★ 플레이리스트의 전체 경로를 상대 경로로 수정
+                index_playlist = hls_dir / "index.m3u8"
+                if index_playlist.exists():
+                    with open(index_playlist, "r") as f:
+                        playlist_content = f.read()
+
+                    # Windows/Unix 경로 구분자 모두 처리
+                    hls_dir_str = str(hls_dir).replace("\\", "/")
+                    playlist_content = playlist_content.replace(f"{hls_dir_str}/", "")
+                    playlist_content = playlist_content.replace(str(hls_dir) + "\\", "")
+
+                    with open(index_playlist, "w") as f:
+                        f.write(playlist_content)
+
+                    logger.info(f"✅ Playlist paths normalized to relative paths")
 
                 # Create master playlist
                 with open(master_playlist, "w") as f:
