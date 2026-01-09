@@ -968,6 +968,53 @@ async def list_videos(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/videos/by-url")
+async def get_video_by_url_api(
+    url: str,
+    api_key: str = Header(None, alias="X-API-Key")
+):
+    """
+    Get video by original URL.
+    This allows looking up videos downloaded via Telegram bot from the web.
+    """
+    try:
+        await verify_api_key(api_key)
+    except:
+        pass
+
+    from src.db import get_video_by_url
+    from src.link_shortener import get_or_create_short_link
+
+    try:
+        video = await get_video_by_url(url)
+
+        if not video:
+            return {
+                "success": False,
+                "found": False,
+                "message": "Video not found for this URL"
+            }
+
+        # Create streaming link for the video
+        sb = await get_database()
+        short_id = await get_or_create_short_link(
+            sb,
+            video.get('file_id'),
+            video.get('id'),
+            video.get('user_id') or DEFAULT_USER_ID
+        )
+
+        return {
+            "success": True,
+            "found": True,
+            "data": video,
+            "stream_url": f"/watch/{short_id}"
+        }
+    except Exception as e:
+        logger.error(f"Error getting video by URL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/videos/{video_id}")
 async def get_video_details(
     video_id: int,
@@ -978,15 +1025,15 @@ async def get_video_details(
         await verify_api_key(api_key)
     except:
         pass
-    
+
     from src.db import get_video_by_id
-    
+
     try:
         video = await get_video_by_id(video_id)
-        
+
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
-        
+
         return {
             "success": True,
             "data": video
@@ -1787,13 +1834,26 @@ async def search_page(
     sort: str = "latest"
 ):
     """Advanced search page with filters"""
-    from src.db import get_database, search_videos
+    from src.db import get_database, search_videos, get_video_by_url
     from src.link_shortener import get_or_create_short_link
-    
+
     try:
         if not user_id:
             user_id = DEFAULT_USER_ID
         sb = await get_database()
+
+        # Check if query looks like a URL - redirect to watch page if found
+        if q and (q.startswith('http://') or q.startswith('https://')):
+            video = await get_video_by_url(q)
+            if video:
+                short_id = await get_or_create_short_link(
+                    sb,
+                    video.get('file_id'),
+                    video.get('id'),
+                    video.get('user_id') or DEFAULT_USER_ID
+                )
+                return RedirectResponse(url=f"/watch/{short_id}", status_code=302)
+
         # Search videos with filters
         results = await search_videos(
             user_id=user_id,

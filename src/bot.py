@@ -132,9 +132,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     existing_video = await get_video_by_url(url)
     if existing_video:
         try:
-            # Check for multiple parts in metadata
-            parts = existing_video.get('metadata', {}).get('parts', [])
-            
+            metadata = existing_video.get('metadata', {}) or {}
+            parts = metadata.get('parts', [])
+            is_large_file = metadata.get('is_large_file', False)
+
+            # Check if it's a large file - send streaming URL only
+            if is_large_file:
+                db_client = await get_database()
+                short_id = await get_or_create_short_link(db_client, existing_video['file_id'], existing_video.get('id'), user_id)
+                stream_url = f"{BASE_URL}/watch/{short_id}"
+
+                stream_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🎬 심리스 스트리밍으로 보기", url=stream_url)
+                ]])
+
+                await update.effective_message.reply_text(
+                    f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n\n"
+                    f"📹 **{escape_markdown(existing_video.get('title', '영상'))}**\n\n"
+                    f"⚠️ 대용량 파일이므로 스트리밍으로 감상하세요\\!",
+                    reply_markup=stream_markup,
+                    parse_mode='Markdown'
+                )
+                return
+
             if parts:
                 await update.effective_message.reply_text(
                     f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n총 {len(parts)}개의 파트로 나누어 보내드릴게요! (준비 중...)"
@@ -162,14 +182,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.effective_message.reply_text(
                     f"앗! 이 영상은 이미 제가 기억하고 있어요! 🧠\n바로 보내드릴게요! (준비 중...)"
                 )
-                
+
                 # Create Streaming Button with short link
                 db_client = await get_database()
                 short_id = await get_or_create_short_link(db_client, existing_video['file_id'], existing_video.get('id'), user_id)
                 stream_markup = InlineKeyboardMarkup([[
                     InlineKeyboardButton("🎬 스트리밍으로 보기", url=f"{BASE_URL}/watch/{short_id}")
                 ]])
-                
+
                 await update.effective_message.reply_video(
                     video=existing_video['file_id'],
                     caption=f"다시 보기: {existing_video.get('title', '영상')}",
@@ -594,15 +614,110 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 progress_hook=progress_hook,
                 quality=quality
             )
-            
+
             logging.info(f"Downloaded file: {file_path}")
             if not os.path.exists(file_path):
                 logging.error(f"File not found on disk after download: {file_path}")
                 # Try to list directory for debugging
                 logging.info(f"Files in downloads/: {os.listdir('downloads')}")
-            
-            # 2. Split if necessary
-            logging.info(f"Checking if split is needed for: {file_path}")
+
+            # 2. Check file size and determine upload strategy
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+            logging.info(f"Downloaded file size: {file_size / (1024*1024):.2f} MB")
+
+            # If file is large (needs splitting), use streaming-only approach
+            is_large_file = file_size > MAX_FILE_SIZE
+
+            if is_large_file and file_path.lower().endswith('.mp4'):
+                logging.info("Large file detected. Using streaming-only approach.")
+                await status_message.edit_text("다운로드 완료! 🎉 대용량 파일이므로 스트리밍 링크를 생성합니다... 🔍")
+
+                # Split for Bin Channel upload (for streaming)
+                parts = await split_video(file_path, MAX_FILE_SIZE)
+                logging.info(f"Split into {len(parts)} parts for streaming")
+
+                # Upload to Bin Channel only (not to user)
+                bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+                if not bin_channel_id:
+                    raise Exception("BIN_CHANNEL_ID not configured for large file streaming")
+
+                uploaded_parts = []
+                for i, part in enumerate(parts):
+                    part_label = f" (Part {i+1}/{len(parts)})" if len(parts) > 1 else ""
+                    await status_message.edit_text(f"스트리밍 서버로 업로드 중...{part_label} 📤")
+
+                    with open(part, 'rb') as video_file:
+                        bin_msg = await context.bot.send_video(
+                            chat_id=int(bin_channel_id),
+                            video=video_file,
+                            caption=f"{video_meta['title']}{part_label}\n\nID: {video_id}",
+                            supports_streaming=True,
+                            read_timeout=600,
+                            write_timeout=600,
+                            connect_timeout=60
+                        )
+                        uploaded_parts.append({
+                            "file_id": bin_msg.video.file_id,
+                            "type": "video",
+                            "part": i + 1,
+                            "total": len(parts)
+                        })
+
+                    # Cleanup part file
+                    if os.path.exists(part):
+                        os.remove(part)
+
+                # Save metadata to database
+                db_data = {
+                    "url": url,
+                    "file_id": uploaded_parts[0]['file_id'],  # Primary file_id
+                    "title": video_meta['title'],
+                    "duration": video_meta['duration'],
+                    "thumbnail": video_meta['thumbnail'],
+                    "user_id": user_id,
+                    "metadata": {
+                        "quality": quality,
+                        "format_id": format_id,
+                        "parts": uploaded_parts,
+                        "is_large_file": True
+                    }
+                }
+                result = await save_video_metadata(db_data)
+                logging.info("Large file metadata saved to database.")
+
+                # Increment download count
+                try:
+                    await increment_download_count(await get_database(), user_id)
+                except Exception as e:
+                    logging.error(f"Error incrementing download count: {e}")
+
+                # Create short link for streaming
+                db_client = await get_database()
+                short_id = await get_or_create_short_link(db_client, uploaded_parts[0]['file_id'], None, user_id)
+                stream_url = f"{BASE_URL}/watch/{short_id}"
+
+                # Send streaming link to user (no video upload)
+                stream_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🎬 심리스 스트리밍으로 보기", url=stream_url)
+                ]])
+
+                await status_message.edit_text(
+                    f"✅ **다운로드 완료!**\n\n"
+                    f"📹 **{escape_markdown(video_meta['title'])}**\n\n"
+                    f"⚠️ 파일 크기가 커서 \\({file_size / (1024*1024):.0f}MB\\) 텔레그램 직접 전송이 불가능합니다\\.\n\n"
+                    f"🎬 아래 버튼을 눌러 **심리스 스트리밍**으로 감상하세요\\!",
+                    reply_markup=stream_markup,
+                    parse_mode='Markdown'
+                )
+
+                # Cleanup original file
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+
+                return  # Exit early for large files
+
+            # 3. Regular upload flow for small files
+            logging.info(f"Small file detected. Using direct upload approach.")
             await status_message.edit_text("다운로드 완료! 🎉 파일을 검사하고 업로드를 준비합니다... 🔍")
             parts = await split_video(file_path, MAX_FILE_SIZE)
             logging.info(f"Split completed. Number of parts: {len(parts)}")
