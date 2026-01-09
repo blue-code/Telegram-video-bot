@@ -52,7 +52,17 @@ async def save_video_metadata(data: dict):
     If the URL already exists, it will be updated (upsert).
     """
     sb = await get_database()
-    result = await sb.table(VIDEO_TABLE).upsert(data, on_conflict="url").execute()
+
+    # Check if video with this URL already exists
+    existing = await get_video_by_url(data.get("url"))
+
+    if existing:
+        # Update existing record
+        result = await sb.table(VIDEO_TABLE).update(data).eq("id", existing["id"]).execute()
+    else:
+        # Insert new record
+        result = await sb.table(VIDEO_TABLE).insert(data).execute()
+
     return result.data
 
 async def get_video_by_url(url: str):
