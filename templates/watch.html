@@ -98,6 +98,76 @@
             gap: 5px;
         }
 
+        .video-actions {
+            margin-top: 16px;
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: #fff;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+
+        .action-btn:hover {
+            background: rgba(255, 255, 255, 0.2);
+            border-color: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        .action-btn:active {
+            transform: translateY(0);
+        }
+
+        .action-btn svg {
+            width: 18px;
+            height: 18px;
+            fill: currentColor;
+        }
+
+        .share-toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.9);
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            display: none;
+            z-index: 1000;
+            animation: slideUp 0.3s ease;
+        }
+
+        .share-toast.show {
+            display: block;
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translate(-50%, 20px);
+            }
+            to {
+                opacity: 1;
+                transform: translate(-50%, 0);
+            }
+        }
+
         .video-container {
             position: relative;
             background: #000;
@@ -307,7 +377,20 @@
                         <span>{{ upload_date }}</span>
                     </div>
                 </div>
+
+                <!-- 액션 버튼 -->
+                <div class="video-actions">
+                    <button class="action-btn" id="share-btn" onclick="shareVideo()">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
+                        </svg>
+                        <span>공유</span>
+                    </button>
+                </div>
             </div>
+
+            <!-- 공유 토스트 메시지 -->
+            <div class="share-toast" id="share-toast"></div>
 
             <div class="video-container">
                 <video id="video-player" controls autoplay preload="auto" name="media">
@@ -1021,6 +1104,82 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <!-- PWA Install Prompt -->
     <script src="/static/pwa-install.js"></script>
+
+    <!-- Share Video Function -->
+    <script>
+        function showToast(message) {
+            const toast = document.getElementById('share-toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        async function shareVideo() {
+            const shareData = {
+                title: '{{ video_title }}',
+                text: '심리스 스트리밍으로 감상하세요! 🎬',
+                url: window.location.href
+            };
+
+            // Web Share API 지원 확인 (모바일)
+            if (navigator.share) {
+                try {
+                    await navigator.share(shareData);
+                    console.log('공유 완료');
+                } catch (err) {
+                    // 사용자가 취소한 경우
+                    if (err.name !== 'AbortError') {
+                        console.error('공유 실패:', err);
+                        fallbackCopyToClipboard();
+                    }
+                }
+            } else {
+                // Web Share API 미지원 (데스크톱) - 클립보드 복사
+                fallbackCopyToClipboard();
+            }
+        }
+
+        function fallbackCopyToClipboard() {
+            const url = window.location.href;
+
+            // Clipboard API 사용 (최신 브라우저)
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(url)
+                    .then(() => {
+                        showToast('✅ 링크가 클립보드에 복사되었습니다!');
+                    })
+                    .catch(err => {
+                        console.error('클립보드 복사 실패:', err);
+                        legacyCopyToClipboard(url);
+                    });
+            } else {
+                // Fallback: 구형 브라우저 지원
+                legacyCopyToClipboard(url);
+            }
+        }
+
+        function legacyCopyToClipboard(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+
+            try {
+                document.execCommand('copy');
+                showToast('✅ 링크가 클립보드에 복사되었습니다!');
+            } catch (err) {
+                console.error('복사 실패:', err);
+                showToast('❌ 링크 복사에 실패했습니다');
+            }
+
+            document.body.removeChild(textarea);
+        }
+    </script>
 
     <script>
         if ('serviceWorker' in navigator) {
