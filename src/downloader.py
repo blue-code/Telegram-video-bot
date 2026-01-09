@@ -9,11 +9,10 @@ async def extract_video_info(url: str):
     Does not download the video.
     Returns playlist info if URL is a playlist, otherwise single video info.
     """
-    ydl_opts = {
+    # Common options for YouTube 403 bypass
+    common_opts = {
         'quiet': True,
         'no_warnings': True,
-        'extract_flat': 'in_playlist',  # For playlists, just get metadata
-        # YouTube 403 Forbidden 우회
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'web'],
@@ -29,13 +28,18 @@ async def extract_video_info(url: str):
         'nocheckcertificate': True,
     }
 
-    # Run blocking yt_dlp call in a separate thread
+    # First, check if it's a playlist with flat extraction
+    ydl_opts_flat = {
+        **common_opts,
+        'extract_flat': 'in_playlist',  # Only for initial playlist detection
+    }
+
     loop = asyncio.get_running_loop()
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        # Partial allows passing arguments to the function
+
+    with yt_dlp.YoutubeDL(ydl_opts_flat) as ydl:
         func = partial(ydl.extract_info, url, download=False)
         info = await loop.run_in_executor(None, func)
-    
+
     # Check if it's a playlist
     if info.get('_type') == 'playlist' or 'entries' in info:
         entries = list(info.get('entries', []))
@@ -55,16 +59,26 @@ async def extract_video_info(url: str):
             ],
             'webpage_url': info.get('webpage_url')
         }
-    else:
-        return {
-            'is_playlist': False,
-            'id': info.get('id'),
-            'title': info.get('title'),
-            'duration': info.get('duration'),
-            'thumbnail': info.get('thumbnail'),
-            'formats': info.get('formats', []),
-            'webpage_url': info.get('webpage_url')
-        }
+
+    # For single videos, re-extract WITHOUT extract_flat to get full format info
+    ydl_opts_full = {
+        **common_opts,
+        # No extract_flat - get full format information
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts_full) as ydl:
+        func = partial(ydl.extract_info, url, download=False)
+        info = await loop.run_in_executor(None, func)
+
+    return {
+        'is_playlist': False,
+        'id': info.get('id'),
+        'title': info.get('title'),
+        'duration': info.get('duration'),
+        'thumbnail': info.get('thumbnail'),
+        'formats': info.get('formats', []),
+        'webpage_url': info.get('webpage_url')
+    }
 
 async def download_video(url: str, format_id: str, output_path: str, progress_hook=None, quality: str = None):
     """
