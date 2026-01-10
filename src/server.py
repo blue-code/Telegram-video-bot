@@ -1634,7 +1634,7 @@ async def web_download(
                 logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
             # Notify user via Telegram if user_id is provided
-            if user_id:
+            if user_id == DEFAULT_USER_ID:
                 try:
                     stream_url = f"{BASE_URL}/watch/{short_id}"
                     download_url = f"{BASE_URL}/download/{short_id}"
@@ -1760,7 +1760,7 @@ async def web_download(
             logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
         # Notify user via Telegram if user_id is provided
-        if user_id:
+        if user_id == DEFAULT_USER_ID:
             try:
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
@@ -2302,7 +2302,7 @@ async def upload_file(
             logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
         # Notify user via Telegram if user_id is provided
-        if user_id:
+        if user_id == DEFAULT_USER_ID:
             try:
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
