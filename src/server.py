@@ -1658,23 +1658,26 @@ async def web_download(
             # Notify DEFAULT_USER_ID via Telegram
             if DEFAULT_USER_ID:
                 try:
-                    logger.info(f"📢 Sending completion notification to {DEFAULT_USER_ID}...")
+                    logger.info(f"📢 Preparing notification for admin (ID: {DEFAULT_USER_ID})")
                     stream_url = f"{BASE_URL}/watch/{short_id}"
                     download_url = f"{BASE_URL}/download/{short_id}"
+                    msg_text = (
+                        f"✅ **웹 다운로드 완료! (Large File)**\n\n"
+                        f"📹 **{title}**\n"
+                        f"⚠️ 대용량 파일이므로 스트리밍으로 제공됩니다.\n\n"
+                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
+                        f"📥 [파일 다운로드]({download_url})"
+                    )
                     await bot.send_message(
                         chat_id=DEFAULT_USER_ID,
-                        text=(
-                            f"✅ **웹 업로드 완료!**\n\n"
-                            f"📹 **{title}**\n"
-                            f"⚠️ 대용량 파일이므로 스트리밍으로 제공됩니다.\n\n"
-                            f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
-                            f"📥 [파일 다운로드]({download_url})"
-                        ),
+                        text=msg_text,
                         parse_mode=ParseMode.MARKDOWN
                     )
-                    logger.info("✅ Notification sent successfully")
+                    logger.info(f"✅ Notification sent to {DEFAULT_USER_ID}")
                 except Exception as notify_error:
-                    logger.error(f"❌ Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
+                    logger.error(f"❌ Failed to notify admin {DEFAULT_USER_ID}: {notify_error}")
+            else:
+                logger.warning("⚠️ DEFAULT_USER_ID is not set, skipping notification")
 
             # Update progress to completed
             download_progress[task_id]['status'] = 'completed'
@@ -1786,22 +1789,25 @@ async def web_download(
         # Notify DEFAULT_USER_ID via Telegram
         if DEFAULT_USER_ID:
             try:
-                logger.info(f"📢 Sending completion notification to {DEFAULT_USER_ID}...")
+                logger.info(f"📢 Preparing notification for admin (ID: {DEFAULT_USER_ID})")
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
+                msg_text = (
+                    f"✅ **웹 다운로드 완료!**\n\n"
+                    f"📹 **{title}**\n\n"
+                    f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
+                    f"📥 [파일 다운로드]({download_url})"
+                )
                 await bot.send_message(
                     chat_id=DEFAULT_USER_ID,
-                    text=(
-                        f"✅ **웹 업로드 완료!**\n\n"
-                        f"📹 **{title}**\n\n"
-                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
-                        f"📥 [파일 다운로드]({download_url})"
-                    ),
+                    text=msg_text,
                     parse_mode=ParseMode.MARKDOWN
                 )
-                logger.info("✅ Notification sent successfully")
+                logger.info(f"✅ Notification sent to {DEFAULT_USER_ID}")
             except Exception as notify_error:
-                logger.error(f"❌ Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
+                logger.error(f"❌ Failed to notify admin {DEFAULT_USER_ID}: {notify_error}")
+        else:
+            logger.warning("⚠️ DEFAULT_USER_ID is not set, skipping notification")
 
         # Update progress to completed
         download_progress[task_id]['status'] = 'completed'
@@ -2323,22 +2329,25 @@ async def upload_file(
         # Notify DEFAULT_USER_ID via Telegram
         if DEFAULT_USER_ID:
             try:
-                logger.info(f"📢 Sending completion notification to {DEFAULT_USER_ID}...")
+                logger.info(f"📢 Preparing notification for admin (ID: {DEFAULT_USER_ID})")
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
+                msg_text = (
+                    f"✅ **웹 업로드 완료!**\n\n"
+                    f"📹 **{file.filename}**\n\n"
+                    f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
+                    f"📥 [파일 다운로드]({download_url})"
+                )
                 await bot.send_message(
                     chat_id=DEFAULT_USER_ID,
-                    text=(
-                        f"✅ **웹 업로드 완료!**\n\n"
-                        f"📹 **{file.filename}**\n\n"
-                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
-                        f"📥 [파일 다운로드]({download_url})"
-                    ),
+                    text=msg_text,
                     parse_mode=ParseMode.MARKDOWN
                 )
-                logger.info("✅ Notification sent successfully")
+                logger.info(f"✅ Notification sent to {DEFAULT_USER_ID}")
             except Exception as notify_error:
-                logger.error(f"❌ Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
+                logger.error(f"❌ Failed to notify admin {DEFAULT_USER_ID}: {notify_error}")
+        else:
+            logger.warning("⚠️ DEFAULT_USER_ID is not set, skipping notification")
 
         # Delete temporary file(s) immediately
         cleanup_paths = set(parts + [tmp_path])
