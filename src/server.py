@@ -21,6 +21,9 @@ import hashlib
 import time
 import re
 import traceback
+from telegram import Bot
+from telegram.request import HTTPXRequest
+from telegram.constants import ParseMode
 
 # Initialize
 load_dotenv()
@@ -31,6 +34,31 @@ app = FastAPI(title="TVB API", version="1.0.0")
 DEFAULT_USER_ID = int(os.getenv("ADMIN_USER_ID", "41509535"))
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 MAX_WEB_UPLOAD_SIZE = 15 * 1024 * 1024  # 15MB to stay under Telegram getFile limit.
+
+# Global Bot Instance
+global_bot: Optional[Bot] = None
+
+@app.on_event("startup")
+async def startup_event():
+    global global_bot
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if token:
+        try:
+            request = HTTPXRequest(
+                connect_timeout=60,
+                read_timeout=600,
+                write_timeout=600,
+                pool_timeout=60
+            )
+            global_bot = Bot(token=token, request=request)
+            me = await global_bot.get_me()
+            logger.info(f"🤖 Bot initialized: @{me.username} (ID: {me.id})")
+            logger.info(f"📢 Notification target (DEFAULT_USER_ID): {DEFAULT_USER_ID}")
+        except Exception as e:
+            logger.error(f"❌ Bot initialization failed: {e}")
+            global_bot = None
+    else:
+        logger.warning("⚠️ TELEGRAM_BOT_TOKEN not found. Bot features will be disabled.")
 
 # Add CORS middleware
 app.add_middleware(
@@ -1389,18 +1417,11 @@ async def web_download(
         except ValueError:
             pass
 
-        # Upload to Telegram
-        from telegram import Bot
-        from telegram.constants import ParseMode
-        from telegram.request import HTTPXRequest
-
-        request = HTTPXRequest(
-            connect_timeout=60,
-            read_timeout=600,
-            write_timeout=600,
-            pool_timeout=60
-        )
-        bot = Bot(token=bot_token, request=request)
+        # Use global bot instance
+        if not global_bot:
+            raise Exception("Telegram Bot not initialized (check server logs)")
+        
+        bot = global_bot
 
         async def send_with_retries(send_func, label):
             last_error = None
@@ -1636,6 +1657,7 @@ async def web_download(
             # Notify DEFAULT_USER_ID via Telegram
             if DEFAULT_USER_ID:
                 try:
+                    logger.info(f"📢 Sending completion notification to {DEFAULT_USER_ID}...")
                     stream_url = f"{BASE_URL}/watch/{short_id}"
                     download_url = f"{BASE_URL}/download/{short_id}"
                     await bot.send_message(
@@ -1649,8 +1671,9 @@ async def web_download(
                         ),
                         parse_mode=ParseMode.MARKDOWN
                     )
+                    logger.info("✅ Notification sent successfully")
                 except Exception as notify_error:
-                    logger.warning(f"Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
+                    logger.error(f"❌ Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
 
             # Update progress to completed
             download_progress[task_id]['status'] = 'completed'
@@ -1762,6 +1785,7 @@ async def web_download(
         # Notify DEFAULT_USER_ID via Telegram
         if DEFAULT_USER_ID:
             try:
+                logger.info(f"📢 Sending completion notification to {DEFAULT_USER_ID}...")
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
                 await bot.send_message(
@@ -1774,8 +1798,9 @@ async def web_download(
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
+                logger.info("✅ Notification sent successfully")
             except Exception as notify_error:
-                logger.warning(f"Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
+                logger.error(f"❌ Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
 
         # Update progress to completed
         download_progress[task_id]['status'] = 'completed'
@@ -2045,18 +2070,11 @@ async def upload_file(
         else:
             logger.info("BIN_CHANNEL_ID not set; uploading to user_id=%s", user_id)
 
-        # Upload to Telegram
-        from telegram import Bot
-        from telegram.constants import ParseMode
-        from telegram.request import HTTPXRequest
-
-        request = HTTPXRequest(
-            connect_timeout=60,
-            read_timeout=600,
-            write_timeout=600,
-            pool_timeout=60
-        )
-        bot = Bot(token=bot_token, request=request)
+        # Use global bot instance
+        if not global_bot:
+            raise Exception("Telegram Bot not initialized (check server logs)")
+        
+        bot = global_bot
 
         async def send_with_retries(send_func, label):
             last_error = None
@@ -2304,6 +2322,7 @@ async def upload_file(
         # Notify DEFAULT_USER_ID via Telegram
         if DEFAULT_USER_ID:
             try:
+                logger.info(f"📢 Sending completion notification to {DEFAULT_USER_ID}...")
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
                 await bot.send_message(
@@ -2316,8 +2335,9 @@ async def upload_file(
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
+                logger.info("✅ Notification sent successfully")
             except Exception as notify_error:
-                logger.warning(f"Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
+                logger.error(f"❌ Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
 
         # Delete temporary file(s) immediately
         cleanup_paths = set(parts + [tmp_path])
