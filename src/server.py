@@ -454,11 +454,11 @@ async def stream_video(
                             r.raise_for_status()
                             async for chunk in r.aiter_bytes(chunk_size=chunk_size):
                                 yield chunk
-                except (OSError, asyncio.CancelledError) as e:
-                    logger.debug(f"Client disconnected during range stream: {e}")
-                    return
                 except Exception as e:
-                    logger.error(f"Stream range error: {e}")
+                    if "ClientDisconnected" in str(type(e).__name__) or isinstance(e, (OSError, asyncio.CancelledError)):
+                        logger.debug(f"Client disconnected during range stream: {e}")
+                    else:
+                        logger.error(f"Stream range error: {e}")
                     return
             
             return StreamingResponse(
@@ -482,11 +482,11 @@ async def stream_video(
                         r.raise_for_status()
                         async for chunk in r.aiter_bytes(chunk_size=chunk_size):
                             yield chunk
-            except (OSError, asyncio.CancelledError) as e:
-                logger.debug(f"Client disconnected during file stream: {e}")
-                return
             except Exception as e:
-                logger.error(f"Stream file error: {e}")
+                if "ClientDisconnected" in str(type(e).__name__) or isinstance(e, (OSError, asyncio.CancelledError)):
+                    logger.debug(f"Client disconnected during file stream: {e}")
+                else:
+                    logger.error(f"Stream file error: {e}")
                 return
         
         return StreamingResponse(
@@ -642,9 +642,12 @@ async def stream_concat(short_id: str):
                         if not chunk:
                             break
                         yield chunk
-                except (OSError, asyncio.CancelledError) as e:
-                    logger.debug(f"Client disconnected during concat stream: {e}")
-                    # Terminate process if client disconnects
+                except Exception as e:
+                    if "ClientDisconnected" in str(type(e).__name__) or isinstance(e, (OSError, asyncio.CancelledError)):
+                        logger.debug(f"Client disconnected during concat stream: {e}")
+                    else:
+                        logger.error(f"Concat stream error: {e}")
+                    # Terminate process if client disconnects or error occurs
                     if process.returncode is None:
                         process.terminate()
                     return
@@ -676,8 +679,11 @@ async def stream_concat(short_id: str):
                         if not chunk:
                             break
                         yield chunk
-                except (OSError, asyncio.CancelledError) as e:
-                    logger.debug(f"Client disconnected during concat stream: {e}")
+                except Exception as e:
+                    if "ClientDisconnected" in str(type(e).__name__) or isinstance(e, (OSError, asyncio.CancelledError)):
+                        logger.debug(f"Client disconnected during concat stream: {e}")
+                    else:
+                        logger.error(f"Concat stream error: {e}")
                     if process.poll() is None:
                         process.terminate()
                     return
