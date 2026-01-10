@@ -36,31 +36,6 @@ DEFAULT_USER_ID = int(os.getenv("ADMIN_USER_ID", "41509535"))
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 MAX_WEB_UPLOAD_SIZE = 15 * 1024 * 1024  # 15MB to stay under Telegram getFile limit.
 
-# Global Bot Instance
-global_bot: Optional[Bot] = None
-
-@app.on_event("startup")
-async def startup_event():
-    global global_bot
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if token:
-        try:
-            request = HTTPXRequest(
-                connect_timeout=60,
-                read_timeout=600,
-                write_timeout=600,
-                pool_timeout=60
-            )
-            global_bot = Bot(token=token, request=request)
-            me = await global_bot.get_me()
-            logger.info(f"🤖 Bot initialized: @{me.username} (ID: {me.id})")
-            logger.info(f"📢 Notification target (DEFAULT_USER_ID): {DEFAULT_USER_ID}")
-        except Exception as e:
-            logger.error(f"❌ Bot initialization failed: {e}")
-            global_bot = None
-    else:
-        logger.warning("⚠️ TELEGRAM_BOT_TOKEN not found. Bot features will be disabled.")
-
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -1418,11 +1393,18 @@ async def web_download(
         except ValueError:
             pass
 
-        # Use global bot instance
-        if not global_bot:
-            raise Exception("Telegram Bot not initialized (check server logs)")
-        
-        bot = global_bot
+        # Upload to Telegram
+        from telegram import Bot
+        from telegram.constants import ParseMode
+        from telegram.request import HTTPXRequest
+
+        request = HTTPXRequest(
+            connect_timeout=60,
+            read_timeout=600,
+            write_timeout=600,
+            pool_timeout=60
+        )
+        bot = Bot(token=bot_token, request=request)
 
         async def send_with_retries(send_func, label):
             last_error = None
@@ -2077,11 +2059,18 @@ async def upload_file(
         else:
             logger.info("BIN_CHANNEL_ID not set; uploading to user_id=%s", user_id)
 
-        # Use global bot instance
-        if not global_bot:
-            raise Exception("Telegram Bot not initialized (check server logs)")
-        
-        bot = global_bot
+        # Upload to Telegram
+        from telegram import Bot
+        from telegram.constants import ParseMode
+        from telegram.request import HTTPXRequest
+
+        request = HTTPXRequest(
+            connect_timeout=60,
+            read_timeout=600,
+            write_timeout=600,
+            pool_timeout=60
+        )
+        bot = Bot(token=bot_token, request=request)
 
         async def send_with_retries(send_func, label):
             last_error = None
