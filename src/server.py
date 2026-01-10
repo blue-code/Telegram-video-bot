@@ -1342,6 +1342,12 @@ async def web_download(
             },
             'nocheckcertificate': True,
         }
+
+        # Use proxy if configured (e.g. for bypassing regional blocks)
+        proxy_url = os.getenv("PROXY_URL")
+        if proxy_url:
+            ydl_opts['proxy'] = proxy_url
+            logger.info(f"Using proxy: {proxy_url}")
         
         if is_audio:
             ydl_opts['postprocessors'] = [{
@@ -1349,14 +1355,22 @@ async def web_download(
                 'preferredcodec': 'mp3',
             }]
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = info.get('title', 'video')
-            downloaded_file = ydl.prepare_filename(info)
-            
-            # Handle audio conversion
-            if quality == 'audio':
-                downloaded_file = str(Path(downloaded_file).with_suffix('.mp3'))
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = info.get('title', 'video')
+                downloaded_file = ydl.prepare_filename(info)
+                
+                # Handle audio conversion
+                if quality == 'audio':
+                    downloaded_file = str(Path(downloaded_file).with_suffix('.mp3'))
+        except Exception as dl_error:
+            # Check for ConnectionResetError or similar transport errors typical of blocking
+            error_str = str(dl_error)
+            if "ConnectionResetError" in error_str or "10054" in error_str:
+                logger.error("Connection reset detected. This site may be blocked in your region.")
+                logger.error("Try setting PROXY_URL in your .env file (e.g., PROXY_URL=http://127.0.0.1:1080)")
+            raise dl_error
         
         logger.info(f"Downloaded to: {downloaded_file}")
         

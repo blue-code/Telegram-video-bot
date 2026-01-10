@@ -117,6 +117,11 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         'nocheckcertificate': True,
     }
 
+    # Use proxy if configured
+    proxy_url = os.getenv("PROXY_URL")
+    if proxy_url:
+        ydl_opts['proxy'] = proxy_url
+
     if format_id == 'bestaudio':
         ydl_opts['postprocessors'] = [{
             'key': 'FFmpegExtractAudio',
