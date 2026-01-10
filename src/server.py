@@ -1633,13 +1633,13 @@ async def web_download(
             except Exception as hls_error:
                 logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
-            # Notify user via Telegram if user_id is provided
-            if user_id == DEFAULT_USER_ID:
+            # Notify DEFAULT_USER_ID via Telegram
+            if DEFAULT_USER_ID:
                 try:
                     stream_url = f"{BASE_URL}/watch/{short_id}"
                     download_url = f"{BASE_URL}/download/{short_id}"
                     await bot.send_message(
-                        chat_id=user_id,
+                        chat_id=DEFAULT_USER_ID,
                         text=(
                             f"✅ **웹 업로드 완료!**\n\n"
                             f"📹 **{title}**\n"
@@ -1650,7 +1650,7 @@ async def web_download(
                         parse_mode=ParseMode.MARKDOWN
                     )
                 except Exception as notify_error:
-                    logger.warning(f"Failed to notify user {user_id}: {notify_error}")
+                    logger.warning(f"Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
 
             # Update progress to completed
             download_progress[task_id]['status'] = 'completed'
@@ -1759,13 +1759,13 @@ async def web_download(
         except Exception as hls_error:
             logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
-        # Notify user via Telegram if user_id is provided
-        if user_id == DEFAULT_USER_ID:
+        # Notify DEFAULT_USER_ID via Telegram
+        if DEFAULT_USER_ID:
             try:
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
                 await bot.send_message(
-                    chat_id=user_id,
+                    chat_id=DEFAULT_USER_ID,
                     text=(
                         f"✅ **웹 업로드 완료!**\n\n"
                         f"📹 **{title}**\n\n"
@@ -1775,7 +1775,7 @@ async def web_download(
                     parse_mode=ParseMode.MARKDOWN
                 )
             except Exception as notify_error:
-                logger.warning(f"Failed to notify user {user_id}: {notify_error}")
+                logger.warning(f"Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
 
         # Update progress to completed
         download_progress[task_id]['status'] = 'completed'
@@ -2301,13 +2301,13 @@ async def upload_file(
         except Exception as hls_error:
             logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
-        # Notify user via Telegram if user_id is provided
-        if user_id == DEFAULT_USER_ID:
+        # Notify DEFAULT_USER_ID via Telegram
+        if DEFAULT_USER_ID:
             try:
                 stream_url = f"{BASE_URL}/watch/{short_id}"
                 download_url = f"{BASE_URL}/download/{short_id}"
                 await bot.send_message(
-                    chat_id=user_id,
+                    chat_id=DEFAULT_USER_ID,
                     text=(
                         f"✅ **웹 업로드 완료!**\n\n"
                         f"📹 **{file.filename}**\n\n"
@@ -2317,7 +2317,7 @@ async def upload_file(
                     parse_mode=ParseMode.MARKDOWN
                 )
             except Exception as notify_error:
-                logger.warning(f"Failed to notify user {user_id}: {notify_error}")
+                logger.warning(f"Failed to notify default user {DEFAULT_USER_ID}: {notify_error}")
 
         # Delete temporary file(s) immediately
         cleanup_paths = set(parts + [tmp_path])
