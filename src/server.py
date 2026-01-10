@@ -31,6 +31,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TVB API", version="1.0.0")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 DEFAULT_USER_ID = int(os.getenv("ADMIN_USER_ID", "41509535"))
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 MAX_WEB_UPLOAD_SIZE = 15 * 1024 * 1024  # 15MB to stay under Telegram getFile limit.
