@@ -1624,6 +1624,23 @@ async def web_download(
 
             logger.info("Upload successful! file_id: %s", master_file_id)
 
+            # Notify user via Telegram if user_id is provided
+            if user_id and user_id != DEFAULT_USER_ID:
+                try:
+                    stream_url = f"{BASE_URL}/watch/{short_id}"
+                    await bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            f"✅ **웹 업로드 완료!**\n\n"
+                            f"📹 **{title}**\n"
+                            f"⚠️ 대용량 파일이므로 스트리밍으로 제공됩니다.\n\n"
+                            f"🔗 [심리스 스트리밍으로 보기]({stream_url})"
+                        ),
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                except Exception as notify_error:
+                    logger.warning(f"Failed to notify user {user_id}: {notify_error}")
+
             # Update progress to completed
             download_progress[task_id]['status'] = 'completed'
             download_progress[task_id]['progress'] = 100
@@ -1723,6 +1740,22 @@ async def web_download(
             }).execute()
         
         logger.info(f"Video metadata saved: video_id={video_id}, short_id={short_id}")
+
+        # Notify user via Telegram if user_id is provided
+        if user_id and user_id != DEFAULT_USER_ID:
+            try:
+                stream_url = f"{BASE_URL}/watch/{short_id}"
+                await bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"✅ **웹 업로드 완료!**\n\n"
+                        f"📹 **{title}**\n\n"
+                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})"
+                    ),
+                    parse_mode=ParseMode.MARKDOWN
+                )
+            except Exception as notify_error:
+                logger.warning(f"Failed to notify user {user_id}: {notify_error}")
 
         # Update progress to completed
         download_progress[task_id]['status'] = 'completed'
