@@ -1634,16 +1634,18 @@ async def web_download(
                 logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
             # Notify user via Telegram if user_id is provided
-            if user_id and user_id != DEFAULT_USER_ID:
+            if user_id:
                 try:
                     stream_url = f"{BASE_URL}/watch/{short_id}"
+                    download_url = f"{BASE_URL}/download/{short_id}"
                     await bot.send_message(
                         chat_id=user_id,
                         text=(
                             f"✅ **웹 업로드 완료!**\n\n"
                             f"📹 **{title}**\n"
                             f"⚠️ 대용량 파일이므로 스트리밍으로 제공됩니다.\n\n"
-                            f"🔗 [심리스 스트리밍으로 보기]({stream_url})"
+                            f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
+                            f"📥 [파일 다운로드]({download_url})"
                         ),
                         parse_mode=ParseMode.MARKDOWN
                     )
@@ -1758,15 +1760,17 @@ async def web_download(
             logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
         # Notify user via Telegram if user_id is provided
-        if user_id and user_id != DEFAULT_USER_ID:
+        if user_id:
             try:
                 stream_url = f"{BASE_URL}/watch/{short_id}"
+                download_url = f"{BASE_URL}/download/{short_id}"
                 await bot.send_message(
                     chat_id=user_id,
                     text=(
                         f"✅ **웹 업로드 완료!**\n\n"
                         f"📹 **{title}**\n\n"
-                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})"
+                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
+                        f"📥 [파일 다운로드]({download_url})"
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
@@ -2298,15 +2302,17 @@ async def upload_file(
             logger.warning(f"Failed to trigger HLS generation: {hls_error}")
 
         # Notify user via Telegram if user_id is provided
-        if user_id and user_id != DEFAULT_USER_ID:
+        if user_id:
             try:
                 stream_url = f"{BASE_URL}/watch/{short_id}"
+                download_url = f"{BASE_URL}/download/{short_id}"
                 await bot.send_message(
                     chat_id=user_id,
                     text=(
                         f"✅ **웹 업로드 완료!**\n\n"
                         f"📹 **{file.filename}**\n\n"
-                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})"
+                        f"🔗 [심리스 스트리밍으로 보기]({stream_url})\n"
+                        f"📥 [파일 다운로드]({download_url})"
                     ),
                     parse_mode=ParseMode.MARKDOWN
                 )
