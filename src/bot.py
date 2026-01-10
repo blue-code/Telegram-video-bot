@@ -41,8 +41,8 @@ def escape_markdown(text: str) -> str:
     return escaped_text
 
 # Telegram Bot API limit for regular bots is 50MB.
-# We set it to 30MB to accommodate VBR spikes and keyframe alignment issues.
-MAX_FILE_SIZE = 30 * 1024 * 1024 # 30MB (Safety buffer for 50MB limit)
+# However, getFile is limited to 20MB. To ensure we can stream it, we must stay under 20MB.
+MAX_FILE_SIZE = 19 * 1024 * 1024 # 19MB (Safe buffer for 20MB getFile limit)
 
 # Get BASE_URL from environment
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
