@@ -443,16 +443,23 @@ async def stream_video(
             
             # Create a generator to stream the requested byte range
             async def iter_range():
-                async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(60.0, read=600.0),
-                    follow_redirects=True
-                ) as client:
-                    # Request the specific range from Telegram
-                    range_headers = {"Range": f"bytes={start}-{end}"}
-                    async with client.stream("GET", download_url, headers=range_headers) as r:
-                        r.raise_for_status()
-                        async for chunk in r.aiter_bytes(chunk_size=chunk_size):
-                            yield chunk
+                try:
+                    async with httpx.AsyncClient(
+                        timeout=httpx.Timeout(60.0, read=600.0),
+                        follow_redirects=True
+                    ) as client:
+                        # Request the specific range from Telegram
+                        range_headers = {"Range": f"bytes={start}-{end}"}
+                        async with client.stream("GET", download_url, headers=range_headers) as r:
+                            r.raise_for_status()
+                            async for chunk in r.aiter_bytes(chunk_size=chunk_size):
+                                yield chunk
+                except (OSError, asyncio.CancelledError) as e:
+                    logger.debug(f"Client disconnected during range stream: {e}")
+                    return
+                except Exception as e:
+                    logger.error(f"Stream range error: {e}")
+                    return
             
             return StreamingResponse(
                 iter_range(),
@@ -466,14 +473,21 @@ async def stream_video(
             headers["Content-Length"] = str(file_size)
 
         async def iter_file():
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(60.0, read=600.0),
-                follow_redirects=True
-            ) as client:
-                async with client.stream("GET", download_url) as r:
-                    r.raise_for_status()
-                    async for chunk in r.aiter_bytes(chunk_size=chunk_size):
-                        yield chunk
+            try:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(60.0, read=600.0),
+                    follow_redirects=True
+                ) as client:
+                    async with client.stream("GET", download_url) as r:
+                        r.raise_for_status()
+                        async for chunk in r.aiter_bytes(chunk_size=chunk_size):
+                            yield chunk
+            except (OSError, asyncio.CancelledError) as e:
+                logger.debug(f"Client disconnected during file stream: {e}")
+                return
+            except Exception as e:
+                logger.error(f"Stream file error: {e}")
+                return
         
         return StreamingResponse(
             iter_file(),
@@ -628,6 +642,12 @@ async def stream_concat(short_id: str):
                         if not chunk:
                             break
                         yield chunk
+                except (OSError, asyncio.CancelledError) as e:
+                    logger.debug(f"Client disconnected during concat stream: {e}")
+                    # Terminate process if client disconnects
+                    if process.returncode is None:
+                        process.terminate()
+                    return
                 finally:
                     if process.returncode is None:
                         process.terminate()
@@ -656,6 +676,11 @@ async def stream_concat(short_id: str):
                         if not chunk:
                             break
                         yield chunk
+                except (OSError, asyncio.CancelledError) as e:
+                    logger.debug(f"Client disconnected during concat stream: {e}")
+                    if process.poll() is None:
+                        process.terminate()
+                    return
                 finally:
                     if process.poll() is None:
                         process.terminate()
