@@ -1335,6 +1335,7 @@ async def web_download(
 
     try:
         logger.info(f"Starting web download: {url} (task_id: {task_id})")
+        logger.info(f"Admin User ID for notifications: {DEFAULT_USER_ID}")
 
         # Progress hook for yt-dlp
         def progress_hook(d):
@@ -2031,6 +2032,8 @@ async def upload_file(
     try:
         if not user_id:
             user_id = DEFAULT_USER_ID
+        
+        logger.info(f"Starting file upload. Admin User ID: {DEFAULT_USER_ID}")
 
         # Save to temporary file
         with tempfile.NamedTemporaryFile(
