@@ -119,6 +119,11 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         'fragment_retries': 10,  # Retry fragment download
         'concurrent_fragment_downloads': 5,  # Download fragments in parallel
         'socket_timeout': 30,  # Increase timeout
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android_creator', 'web'],
+            }
+        },
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
