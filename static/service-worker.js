@@ -60,7 +60,6 @@ self.addEventListener('fetch', event => {
 
   // Skip API requests (use network only)
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/stream/')) {
-    event.respondWith(networkOnly(request));
     return;
   }
 
