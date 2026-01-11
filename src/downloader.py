@@ -89,12 +89,22 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
     if format_id == 'bestaudio':
         format_str = 'bestaudio/best'
     elif quality and quality != 'best' and quality.isdigit():
-        # Height-based quality selection: prefer HLS > DASH (to avoid 403) > Fallback
+        # Height-based quality selection: prefer HLS+AVC (iOS friendly & no 403) > HLS > DASH+AVC > Fallback
         height = int(quality)
-        format_str = f'bestvideo[height<={height}][protocol^=m3u8]+bestaudio/best[height<={height}][protocol^=m3u8]/bestvideo[height<={height}]+bestaudio/best[height<={height}]/best'
+        format_str = (
+            f'bestvideo[height<={height}][protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/'
+            f'bestvideo[height<={height}][protocol^=m3u8]+bestaudio/'
+            f'bestvideo[height<={height}][vcodec^=avc]+bestaudio[acodec^=mp4a]/'
+            f'bestvideo[height<={height}]+bestaudio/best'
+        )
     else:
-        # Best available quality: prefer HLS > DASH (to avoid 403) > Fallback
-        format_str = 'bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/bestvideo+bestaudio/best'
+        # Best available quality: prefer HLS+AVC > HLS > DASH+AVC > Fallback
+        format_str = (
+            'bestvideo[protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/'
+            'bestvideo[protocol^=m3u8]+bestaudio/'
+            'bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/'
+            'bestvideo+bestaudio/best'
+        )
 
     ydl_opts = {
         'format': format_str,
@@ -104,6 +114,7 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         'progress_hooks': [progress_hook] if progress_hook else [],
         'restrictedfilenames': True,
         'merge_output_format': 'mp4',  # Merge video+audio into MP4
+        'format_sort': ['res', 'vcodec:h264', 'acodec:aac'], # Sort preference for safety
         'retries': 10,  # Retry download on error
         'fragment_retries': 10,  # Retry fragment download
         'concurrent_fragment_downloads': 5,  # Download fragments in parallel

@@ -1359,12 +1359,22 @@ async def web_download(
         if is_audio:
             format_spec = "bestaudio/best"
         elif str(quality).isdigit():
-            # Height based with HLS priority
+            # Height based with HLS & AVC priority
             h = int(quality)
-            format_spec = f"bestvideo[height<={h}][protocol^=m3u8]+bestaudio/best[height<={h}][protocol^=m3u8]/bestvideo[height<={h}]+bestaudio/best[height<={h}]/best"
+            format_spec = (
+                f"bestvideo[height<={h}][protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
+                f"bestvideo[height<={h}][protocol^=m3u8]+bestaudio/"
+                f"bestvideo[height<={h}][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
+                f"bestvideo[height<={h}]+bestaudio/best"
+            )
         else:
-            # Best quality with HLS priority
-            format_spec = "bestvideo[protocol^=m3u8]+bestaudio/best[protocol^=m3u8]/bestvideo+bestaudio/best"
+            # Best quality with HLS & AVC priority
+            format_spec = (
+                "bestvideo[protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
+                "bestvideo[protocol^=m3u8]+bestaudio/"
+                "bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/"
+                "bestvideo+bestaudio/best"
+            )
 
         ydl_opts = {
             'format': format_spec,
@@ -1372,6 +1382,7 @@ async def web_download(
             'quiet': False,
             'no_warnings': False,
             'progress_hooks': [progress_hook],
+            'format_sort': ['res', 'vcodec:h264', 'acodec:aac'],
             'http_headers': {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
