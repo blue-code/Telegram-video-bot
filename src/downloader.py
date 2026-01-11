@@ -89,19 +89,16 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
     if format_id == 'bestaudio':
         format_str = 'bestaudio/best'
     elif quality and quality != 'best' and quality.isdigit():
-        # Height-based quality selection: prefer HLS+AVC (iOS friendly & no 403) > HLS > DASH+AVC > Fallback
+        # Height-based quality selection: prefer AVC (H.264) for iOS compatibility
         height = int(quality)
         format_str = (
-            f'bestvideo[height<={height}][protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/'
-            f'bestvideo[height<={height}][protocol^=m3u8]+bestaudio/'
             f'bestvideo[height<={height}][vcodec^=avc]+bestaudio[acodec^=mp4a]/'
+            f'bestvideo[height<={height}]+bestaudio/'
             f'bestvideo[height<={height}]+bestaudio/best'
         )
     else:
-        # Best available quality: prefer HLS+AVC > HLS > DASH+AVC > Fallback
+        # Best available quality: prefer AVC (H.264) > Best
         format_str = (
-            'bestvideo[protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/'
-            'bestvideo[protocol^=m3u8]+bestaudio/'
             'bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/'
             'bestvideo+bestaudio/best'
         )
@@ -121,7 +118,7 @@ async def download_video(url: str, format_id: str, output_path: str, progress_ho
         'socket_timeout': 30,  # Increase timeout
         'extractor_args': {
             'youtube': {
-                'player_client': ['android_creator', 'web'],
+                'player_client': ['tv'],
             }
         },
         'http_headers': {

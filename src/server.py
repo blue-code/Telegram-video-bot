@@ -1359,19 +1359,16 @@ async def web_download(
         if is_audio:
             format_spec = "bestaudio/best"
         elif str(quality).isdigit():
-            # Height based with HLS & AVC priority
+            # Height based with AVC priority
             h = int(quality)
             format_spec = (
-                f"bestvideo[height<={h}][protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
-                f"bestvideo[height<={h}][protocol^=m3u8]+bestaudio/"
                 f"bestvideo[height<={h}][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
+                f"bestvideo[height<={h}]+bestaudio/"
                 f"bestvideo[height<={h}]+bestaudio/best"
             )
         else:
-            # Best quality with HLS & AVC priority
+            # Best quality with AVC priority
             format_spec = (
-                "bestvideo[protocol^=m3u8][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
-                "bestvideo[protocol^=m3u8]+bestaudio/"
                 "bestvideo[vcodec^=avc]+bestaudio[acodec^=mp4a]/"
                 "bestvideo+bestaudio/best"
             )
@@ -1385,7 +1382,7 @@ async def web_download(
             'format_sort': ['res', 'vcodec:h264', 'acodec:aac'],
             'extractor_args': {
                 'youtube': {
-                    'player_client': ['android_creator', 'web'],
+                    'player_client': ['tv'],
                 }
             },
             'http_headers': {
