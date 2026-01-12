@@ -507,7 +507,7 @@
                         <p>Drag & drop your video file here</p>
                         <p style="color: rgba(255, 255, 255, 0.5); font-size: 14px;">or click to browse</p>
                     </div>
-                    <input type="file" id="file-input" class="file-input" accept="video/*" multiple>
+                    <input type="file" id="file-input" class="file-input" accept="video/*, .ts, .m2ts, .mkv, .avi, .flv, .mov, .wmv" multiple>
                     
                     <div class="selected-file" id="selected-file"></div>
 
@@ -951,7 +951,12 @@
             e.preventDefault();
             dropZone.classList.remove('dragover');
             
-            const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('video/'));
+            const files = Array.from(e.dataTransfer.files).filter(f => {
+                return f.type.startsWith('video/') || 
+                       f.name.toLowerCase().endsWith('.ts') || 
+                       f.name.toLowerCase().endsWith('.m2ts') || 
+                       f.name.toLowerCase().endsWith('.mkv');
+            });
             if (files.length > 0) {
                 handleFileSelect(files);
             }
