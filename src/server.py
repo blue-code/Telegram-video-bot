@@ -2480,6 +2480,79 @@ async def upload_file(
         }
 
 
+@app.post("/api/reencode/{short_id}")
+async def reencode_video(short_id: str, background_tasks: BackgroundTasks, user_id: Optional[int] = Body(None)):
+    """Trigger video re-encoding for mobile compatibility"""
+    from src.db import get_video_by_short_id, get_database
+    
+    try:
+        logger.info(f"🔄 Re-encode request received for {short_id} (User: {user_id})")
+        
+        video = await get_video_by_short_id(short_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+            
+        metadata = video.get("metadata") or {}
+        if metadata.get("is_encoded") and os.path.exists(metadata.get("encoded_path", "")):
+            return {"success": True, "message": "Already encoded", "already_exists": True}
+            
+        # Start background task
+        sb = await get_database()
+        
+        target_user_id = user_id or video.get("user_id") or DEFAULT_USER_ID
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        
+        if not token:
+             raise HTTPException(status_code=500, detail="Bot token missing")
+
+        logger.info(f"➕ Adding background task for video {video['id']}")
+        
+        background_tasks.add_task(
+            transcode_video_task,
+            video_id=video["id"],
+            short_id=short_id,
+            user_id=target_user_id,
+            bot_token=token,
+            base_url=BASE_URL,
+            db_client=sb
+        )
+        
+        return {"success": True, "message": "Re-encoding started in background"}
+        
+    except Exception as e:
+        logger.error(f"Re-encode error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stream/encoded/{short_id}")
+async def stream_encoded_video(short_id: str, request: Request):
+    """Stream re-encoded MP4 file with Range support"""
+    from src.db import get_video_by_short_id
+    
+    try:
+        video = await get_video_by_short_id(short_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+            
+        metadata = video.get("metadata") or {}
+        encoded_path = metadata.get("encoded_path")
+        
+        if not encoded_path or not os.path.exists(encoded_path):
+            raise HTTPException(status_code=404, detail="Encoded file not found")
+            
+        return FileResponse(
+            path=encoded_path,
+            media_type="video/mp4",
+            headers={"Accept-Ranges": "bytes"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Encoded stream error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Phase 3: Video Editing Features
 @app.get("/edit/{video_id}", response_class=HTMLResponse)
 async def edit_page(request: Request, video_id: int, user_id: Optional[int] = None):
