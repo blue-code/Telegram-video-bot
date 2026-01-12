@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request, Header, Body, File, UploadFile, Form
+from fastapi import FastAPI, HTTPException, Request, Header, Body, File, UploadFile, Form, BackgroundTasks
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
@@ -1015,7 +1015,7 @@ from src.api_auth import verify_api_key
 
 
 @app.post("/api/reencode/{short_id}")
-async def reencode_video(short_id: str, background_tasks: asyncio.BackgroundTasks, user_id: Optional[int] = Body(None)):
+async def reencode_video(short_id: str, background_tasks: BackgroundTasks, user_id: Optional[int] = Body(None)):
     """Trigger video re-encoding for mobile compatibility"""
     from src.db import get_video_by_short_id, get_database
     
