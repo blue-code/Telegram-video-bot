@@ -101,79 +101,79 @@ async def transcode_video_task(
                     for pf in part_files:
                         f.write(f"file '{pf}'\n")
 
-                        # Concat using FFmpeg (copy codec to create single input file)
-                        logger.info("🔗 Concatenating parts...")
-                        concat_cmd = [
-                            "ffmpeg", "-f", "concat", "-safe", "0",
-                            "-i", concat_list_path, "-c", "copy", input_path
-                        ]
-                        
-                        # Use asyncio.to_thread to avoid blocking event loop
-                        concat_result = await asyncio.to_thread(
-                            subprocess.run, 
-                            concat_cmd, 
-                            check=False, 
-                            capture_output=True
-                        )
-                        
-                        if concat_result.returncode != 0:
-                             raise Exception(f"Concatenation failed: {concat_result.stderr.decode(errors='replace')}")
-                                
-                            else:
-                                # Single file
-                                logger.info("📥 Downloading single video file...")
-                                file_id = video.get("file_id")
-                                file_url = await get_telegram_file_url(bot_token, file_id)
-                                success = await download_file(client, file_url, input_path)
-                                if not success:
-                                    raise Exception("Failed to download video file")
+                # Concat using FFmpeg (copy codec to create single input file)
+                logger.info("🔗 Concatenating parts...")
+                concat_cmd = [
+                    "ffmpeg", "-f", "concat", "-safe", "0",
+                    "-i", concat_list_path, "-c", "copy", input_path
+                ]
                 
-                        # 3. Transcode (Re-encode)
-                        logger.info("⚙️ Transcoding to H.264/AAC (720p, faststart)...")
-                        
-                        # Verify input file
-                        if os.path.exists(input_path):
-                            input_size = os.path.getsize(input_path)
-                            logger.info(f"   Input file size: {input_size} bytes")
-                            if input_size == 0:
-                                raise Exception("Input file is empty")
-                        else:
-                            raise Exception("Input file not found")
+                # Use asyncio.to_thread to avoid blocking event loop
+                concat_result = await asyncio.to_thread(
+                    subprocess.run, 
+                    concat_cmd, 
+                    check=False, 
+                    capture_output=True
+                )
                 
-                        # Resolve ffmpeg path
-                        ffmpeg_exe = shutil.which("ffmpeg")
-                        if not ffmpeg_exe:
-                            raise Exception("FFmpeg executable not found in PATH")
+                if concat_result.returncode != 0:
+                     raise Exception(f"Concatenation failed: {concat_result.stderr.decode(errors='replace')}")
                 
-                        # -vf "scale='min(1280,iw)':-2": Resize to max 720p width, keep aspect ratio
-                        # -crf 26: Reasonable quality/size trade-off for mobile
-                        # -preset veryfast: Faster encoding
-                        transcode_cmd = [
-                            ffmpeg_exe, "-y",
-                            "-i", input_path,
-                            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-                            "-vf", "scale='min(1280,iw)':-2",
-                            "-c:a", "aac", "-b:a", "128k",
-                            "-movflags", "+faststart",
-                            temp_output_path
-                        ]
-                        
-                        logger.info(f"   Command: {' '.join(transcode_cmd)}")
-                
-                        # Use asyncio.to_thread instead of create_subprocess_exec to avoid NotImplementedError on Windows
-                        # and to keep it non-blocking
-                        process_result = await asyncio.to_thread(
-                            subprocess.run,
-                            transcode_cmd,
-                            capture_output=True
-                        )
-                
-                        logger.info(f"   FFmpeg return code: {process_result.returncode}")
-                        
-                        if process_result.returncode != 0:
-                            error_output = process_result.stderr.decode(errors='replace')
-                            logger.error(f"FFmpeg Error Output: {error_output}")
-                            raise Exception(f"Transcoding failed with code {process_result.returncode}")
+            else:
+                # Single file
+                logger.info("📥 Downloading single video file...")
+                file_id = video.get("file_id")
+                file_url = await get_telegram_file_url(bot_token, file_id)
+                success = await download_file(client, file_url, input_path)
+                if not success:
+                    raise Exception("Failed to download video file")
+
+        # 3. Transcode (Re-encode)
+        logger.info("⚙️ Transcoding to H.264/AAC (720p, faststart)...")
+        
+        # Verify input file
+        if os.path.exists(input_path):
+            input_size = os.path.getsize(input_path)
+            logger.info(f"   Input file size: {input_size} bytes")
+            if input_size == 0:
+                raise Exception("Input file is empty")
+        else:
+            raise Exception("Input file not found")
+
+        # Resolve ffmpeg path
+        ffmpeg_exe = shutil.which("ffmpeg")
+        if not ffmpeg_exe:
+            raise Exception("FFmpeg executable not found in PATH")
+
+        # -vf "scale='min(1280,iw)':-2": Resize to max 720p width, keep aspect ratio
+        # -crf 26: Reasonable quality/size trade-off for mobile
+        # -preset veryfast: Faster encoding
+        transcode_cmd = [
+            ffmpeg_exe, "-y",
+            "-i", input_path,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-vf", "scale='min(1280,iw)':-2",
+            "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart",
+            temp_output_path
+        ]
+        
+        logger.info(f"   Command: {' '.join(transcode_cmd)}")
+
+        # Use asyncio.to_thread instead of create_subprocess_exec to avoid NotImplementedError on Windows
+        # and to keep it non-blocking
+        process_result = await asyncio.to_thread(
+            subprocess.run,
+            transcode_cmd,
+            capture_output=True
+        )
+
+        logger.info(f"   FFmpeg return code: {process_result.returncode}")
+        
+        if process_result.returncode != 0:
+            error_output = process_result.stderr.decode(errors='replace')
+            logger.error(f"FFmpeg Error Output: {error_output}")
+            raise Exception(f"Transcoding failed with code {process_result.returncode}")
         # 4. Move to Cache
         if os.path.exists(temp_output_path):
             shutil.move(temp_output_path, final_output_path)
