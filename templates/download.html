@@ -989,46 +989,69 @@
             uploadResult.classList.remove('active');
             uploadBtn.disabled = true;
 
-            try {
-                const file = selectedFiles[0]; // Upload first file
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('user_id', userId);
+            let successCount = 0;
+            let failCount = 0;
+            const totalFiles = selectedFiles.length;
 
-                uploadProgressFill.style.width = '50%';
-                uploadProgressStatus.textContent = `Uploading ${file.name}...`;
+            for (let i = 0; i < totalFiles; i++) {
+                const file = selectedFiles[i];
+                
+                try {
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('user_id', userId);
 
-                const response = await fetch('/api/upload-file', {
-                    method: 'POST',
-                    body: formData
-                });
+                    uploadProgressFill.style.width = '0%';
+                    uploadProgressStatus.textContent = `Uploading ${i + 1}/${totalFiles}: ${file.name}...`;
 
-                const data = await response.json();
+                    const response = await fetch('/api/upload-file', {
+                        method: 'POST',
+                        body: formData
+                    });
 
-                uploadProgressFill.style.width = '100%';
+                    const data = await response.json();
 
-                if (data.success) {
-                    uploadProgressStatus.textContent = 'Complete!';
-                    setTimeout(() => {
-                        uploadProgress.classList.remove('active');
-                        uploadResult.classList.add('active');
-                        uploadResult.classList.remove('error');
-                        uploadResultMessage.textContent = `${data.filename} has been uploaded successfully!`;
-                        uploadWatchBtn.href = `/watch/${data.short_id}`;
-                    }, 500);
-                } else {
-                    throw new Error(data.message || 'Upload failed');
+                    if (data.success) {
+                        successCount++;
+                        uploadProgressFill.style.width = '100%';
+                        // Optional: Add to list of uploaded files in UI
+                    } else {
+                        throw new Error(data.message || 'Upload failed');
+                    }
+                } catch (error) {
+                    failCount++;
+                    console.error(`Failed to upload ${file.name}:`, error);
+                    // Show transient error toast or keep going
+                    showToast(`❌ Failed: ${file.name}`);
                 }
-            } catch (error) {
+            }
+
+            // Final status
+            uploadProgressFill.style.width = '100%';
+            uploadProgressStatus.textContent = `Completed! Success: ${successCount}, Failed: ${failCount}`;
+            
+            setTimeout(() => {
                 uploadProgress.classList.remove('active');
                 uploadResult.classList.add('active');
-                uploadResult.classList.add('error');
-                uploadResult.querySelector('h3').textContent = '❌ Upload Failed';
-                uploadResultMessage.textContent = error.message;
-                uploadWatchBtn.style.display = 'none';
-            } finally {
-                uploadBtn.disabled = selectedFiles.length === 0;
-            }
+                if (failCount > 0 && successCount === 0) {
+                    uploadResult.classList.add('error');
+                    uploadResult.querySelector('h3').textContent = '❌ Uploads Failed';
+                    uploadResultMessage.textContent = `All ${totalFiles} files failed to upload.`;
+                    uploadWatchBtn.style.display = 'none';
+                } else {
+                    uploadResult.classList.remove('error');
+                    uploadResult.querySelector('h3').textContent = '✅ Batch Upload Complete';
+                    uploadResultMessage.textContent = `${successCount} files uploaded successfully. ${failCount > 0 ? `(${failCount} failed)` : ''}`;
+                    uploadWatchBtn.href = `/gallery/${userId}`;
+                    uploadWatchBtn.innerHTML = '<span>📚</span><span>View Gallery</span>';
+                    uploadWatchBtn.style.display = 'inline-flex';
+                }
+            }, 1000);
+
+            uploadBtn.disabled = false;
+            selectedFiles = []; // Clear selection
+            selectedFile.textContent = '';
+            selectedFile.classList.remove('active');
         });
 
         function resetForms() {
