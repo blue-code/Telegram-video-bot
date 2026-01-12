@@ -120,11 +120,26 @@ async def transcode_video_task(
 
         # 3. Transcode (Re-encode)
         logger.info("⚙️ Transcoding to H.264/AAC (720p, faststart)...")
+        
+        # Verify input file
+        if os.path.exists(input_path):
+            input_size = os.path.getsize(input_path)
+            logger.info(f"   Input file size: {input_size} bytes")
+            if input_size == 0:
+                raise Exception("Input file is empty")
+        else:
+            raise Exception("Input file not found")
+
+        # Resolve ffmpeg path
+        ffmpeg_exe = shutil.which("ffmpeg")
+        if not ffmpeg_exe:
+            raise Exception("FFmpeg executable not found in PATH")
+
         # -vf "scale='min(1280,iw)':-2": Resize to max 720p width, keep aspect ratio
         # -crf 26: Reasonable quality/size trade-off for mobile
         # -preset veryfast: Faster encoding
         transcode_cmd = [
-            "ffmpeg", "-y",
+            ffmpeg_exe, "-y",
             "-i", input_path,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
             "-vf", "scale='min(1280,iw)':-2",
@@ -133,6 +148,8 @@ async def transcode_video_task(
             temp_output_path
         ]
         
+        logger.info(f"   Command: {' '.join(transcode_cmd)}")
+
         process = await asyncio.create_subprocess_exec(
             *transcode_cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -140,9 +157,12 @@ async def transcode_video_task(
         )
         stdout, stderr = await process.communicate()
 
+        logger.info(f"   FFmpeg return code: {process.returncode}")
+        
         if process.returncode != 0:
-            logger.error(f"FFmpeg Error: {stderr.decode()}")
-            raise Exception("Transcoding failed")
+            error_output = stderr.decode(errors='replace')
+            logger.error(f"FFmpeg Error Output: {error_output}")
+            raise Exception(f"Transcoding failed with code {process.returncode}")
 
         # 4. Move to Cache
         if os.path.exists(temp_output_path):
@@ -181,7 +201,7 @@ async def transcode_video_task(
                 logger.error(f"Failed to send notification: {notify_e}")
 
     except Exception as e:
-        logger.error(f"❌ Transcoding task failed: {e}")
+        logger.error(f"❌ Transcoding task failed: {repr(e)}")
         # Clean up partial files if any? (Optional)
     finally:
         # Cleanup temp dir
