@@ -24,6 +24,7 @@ import traceback
 from telegram import Bot
 from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
+from src.transcoder import transcode_video_task, cleanup_old_encoded_files
 
 # Initialize
 load_dotenv()
@@ -35,6 +36,39 @@ BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 DEFAULT_USER_ID = int(os.getenv("ADMIN_USER_ID", "41509535"))
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 MAX_WEB_UPLOAD_SIZE = 15 * 1024 * 1024  # 15MB to stay under Telegram getFile limit.
+
+# Global Bot Instance
+global_bot: Optional[Bot] = None
+
+@app.on_event("startup")
+async def startup_event():
+    global global_bot
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    if token:
+        try:
+            request = HTTPXRequest(
+                connect_timeout=60,
+                read_timeout=600,
+                write_timeout=600,
+                pool_timeout=60
+            )
+            global_bot = Bot(token=token, request=request)
+            me = await global_bot.get_me()
+            logger.info(f"🤖 Bot initialized: @{me.username} (ID: {me.id})")
+            logger.info(f"📢 Notification target (DEFAULT_USER_ID): {DEFAULT_USER_ID}")
+        except Exception as e:
+            logger.error(f"❌ Bot initialization failed: {e}")
+            global_bot = None
+    else:
+        logger.warning("⚠️ TELEGRAM_BOT_TOKEN not found. Bot features will be disabled.")
+    
+    # Start cleanup task
+    try:
+        from src.db import get_database
+        sb = await get_database()
+        asyncio.create_task(cleanup_old_encoded_files(sb))
+    except Exception as e:
+        logger.error(f"Failed to start cleanup task: {e}")
 
 # Add CORS middleware
 app.add_middleware(
@@ -342,6 +376,17 @@ async def watch_video(request: Request, short_id: str):
                 )
         
         metadata = video.get("metadata") or {}
+        
+        # Check encoding status
+        is_encoded = metadata.get("is_encoded", False)
+        encoded_path = metadata.get("encoded_path")
+        encoded_url = ""
+        
+        if is_encoded and encoded_path and os.path.exists(encoded_path):
+            encoded_url = f"/stream/encoded/{short_id}"
+        else:
+            is_encoded = False # Reset if file missing
+
         raw_parts = metadata.get("parts") or []
         playlist = []
         for idx, part in enumerate(raw_parts, start=1):
@@ -375,7 +420,9 @@ async def watch_video(request: Request, short_id: str):
             "upload_date": format_date(video.get('created_at')),
             "user_id": video.get("user_id") or DEFAULT_USER_ID,
             "playlist": playlist,
-            "playlist_total": len(playlist)
+            "playlist_total": len(playlist),
+            "is_encoded": is_encoded,
+            "encoded_url": encoded_url
         })
     except Exception as e:
         logger.error(f"Error in watch_video: {e}")
@@ -960,6 +1007,87 @@ async def download_video(short_id: str):
         raise
     except Exception as e:
         logger.error(f"Error downloading video: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Protected API endpoints (require X-API-Key header)
+from src.api_auth import verify_api_key
+
+
+@app.post("/api/reencode/{short_id}")
+async def reencode_video(short_id: str, background_tasks: asyncio.BackgroundTasks, user_id: Optional[int] = Body(None)):
+    """Trigger video re-encoding for mobile compatibility"""
+    from src.db import get_video_by_short_id, get_database
+    
+    try:
+        video = await get_video_by_short_id(short_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+            
+        metadata = video.get("metadata") or {}
+        if metadata.get("is_encoded") and os.path.exists(metadata.get("encoded_path", "")):
+            return {"success": True, "message": "Already encoded", "already_exists": True}
+            
+        # Get file path
+        file_id = video.get("file_id")
+        if not file_id:
+            raise HTTPException(status_code=400, detail="No file ID found")
+            
+        download_url = await get_file_path_from_telegram(file_id)
+        
+        # Start background task
+        sb = await get_database()
+        
+        # Use global bot if available
+        bot_instance = global_bot
+        target_user_id = user_id or video.get("user_id") or DEFAULT_USER_ID
+        
+        output_filename = f"{short_id}_mobile.mp4"
+        
+        background_tasks.add_task(
+            transcode_video_task,
+            video_id=video["id"],
+            file_path=download_url,
+            output_filename=output_filename,
+            db_client=sb,
+            bot=bot_instance,
+            user_id=target_user_id,
+            title=video.get("title", "Video")
+        )
+        
+        return {"success": True, "message": "Re-encoding started in background"}
+        
+    except Exception as e:
+        logger.error(f"Re-encode error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stream/encoded/{short_id}")
+async def stream_encoded_video(short_id: str, request: Request):
+    """Stream re-encoded MP4 file with Range support"""
+    from src.db import get_video_by_short_id
+    
+    try:
+        video = await get_video_by_short_id(short_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+            
+        metadata = video.get("metadata") or {}
+        encoded_path = metadata.get("encoded_path")
+        
+        if not encoded_path or not os.path.exists(encoded_path):
+            raise HTTPException(status_code=404, detail="Encoded file not found")
+            
+        return FileResponse(
+            path=encoded_path,
+            media_type="video/mp4",
+            headers={"Accept-Ranges": "bytes"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Encoded stream error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

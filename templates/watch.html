@@ -460,6 +460,11 @@
         const shortId = '{{ short_id }}';
         const playlist = {{ playlist | tojson }};
         const playlistTotal = {{ playlist_total }};
+        
+        // Encoding status from server
+        const isEncoded = {{ is_encoded | tojson }};
+        const encodedUrl = "{{ encoded_url }}";
+        
         const partMeta = document.getElementById('part-meta');
         const partLabel = document.getElementById('part-label');
         let currentIndex = Math.max(
@@ -473,6 +478,99 @@
         let bufferingTimeout = null;
         let prefetchedParts = new Set(); // Track prefetched parts
         let hls = null; // HLS.js instance
+
+        // Mobile Detection
+        const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+        // UI Initialization
+        document.addEventListener('DOMContentLoaded', () => {
+            // Add Optimize Button
+            const controlsPanel = document.querySelector('.controls-panel');
+            const optimizeBtn = document.createElement('button');
+            optimizeBtn.className = 'btn btn-secondary';
+            optimizeBtn.id = 'optimize-btn';
+            
+            if (isEncoded) {
+                optimizeBtn.innerHTML = '<span>✅</span><span>Optimized</span>';
+                optimizeBtn.classList.replace('btn-secondary', 'btn-primary');
+                optimizeBtn.style.backgroundColor = '#10b981'; // Green
+                optimizeBtn.disabled = true;
+            } else {
+                optimizeBtn.innerHTML = '<span>⚡</span><span>Optimize</span>';
+                optimizeBtn.onclick = requestOptimization;
+            }
+            
+            // Insert before speed control
+            const speedControl = document.querySelector('.speed-control');
+            controlsPanel.insertBefore(optimizeBtn, speedControl);
+
+            // Mobile Auto-Prompt
+            if (isMobile && !isEncoded) {
+                // Delay slightly to not block rendering
+                setTimeout(() => {
+                    if (confirm("모바일 재생 최적화(재인코딩)를 진행하시겠습니까?\n(끊김 없는 재생을 위해 권장됩니다)")) {
+                        requestOptimization();
+                    }
+                }, 1000);
+            }
+
+            // Set Video Source
+            if (isEncoded && encodedUrl) {
+                console.log('Using optimized source:', encodedUrl);
+                video.src = encodedUrl;
+                // Native playback for MP4
+            } else {
+                // Default HLS/Concat logic
+                initPlayer();
+            }
+        });
+
+        async function requestOptimization() {
+            const btn = document.getElementById('optimize-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span>🔄</span><span>Processing...</span>';
+            
+            try {
+                const res = await fetch(`/api/reencode/${shortId}`, { method: 'POST' });
+                const data = await res.json();
+                
+                if (data.success) {
+                    showToast('🚀 Optimization started! You will be notified via Telegram.');
+                    btn.innerHTML = '<span>⏳</span><span>Working...</span>';
+                } else {
+                    showToast('❌ Failed: ' + data.message);
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>⚡</span><span>Optimize</span>';
+                }
+            } catch (err) {
+                console.error(err);
+                showToast('❌ Error requesting optimization');
+                btn.disabled = false;
+                btn.innerHTML = '<span>⚡</span><span>Optimize</span>';
+            }
+        }
+
+        function initPlayer() {
+            // ... existing HLS init logic ...
+            console.log('Checking HLS availability:', hlsUrl);
+            fetch(hlsUrl, { method: 'HEAD' })
+                .then(response => {
+                    console.log('HLS HEAD response:', response.status, response.ok);
+                    if (response.ok) {
+                        console.log('HLS manifest available, using HLS.js');
+                        if (!initHLS(hlsUrl)) {
+                            console.warn('initHLS returned false, falling back');
+                            fallbackToNativeStreaming();
+                        }
+                    } else {
+                        throw new Error(`HLS not available: ${response.status}`);
+                    }
+                })
+                .catch(err => {
+                    console.log('HLS not available, using native streaming:', err.message);
+                    fallbackToNativeStreaming();
+                });
+        }
 
         function updatePartMeta() {
             if (playlistTotal <= 1 || !usePartsPlayback) {
@@ -751,26 +849,6 @@
             }
         }
         
-        // Try HLS first for better adaptive streaming
-        console.log('Checking HLS availability:', hlsUrl);
-        fetch(hlsUrl, { method: 'HEAD' })
-            .then(response => {
-                console.log('HLS HEAD response:', response.status, response.ok);
-                if (response.ok) {
-                    console.log('HLS manifest available, using HLS.js');
-                    if (!initHLS(hlsUrl)) {
-                        console.warn('initHLS returned false, falling back');
-                        fallbackToNativeStreaming();
-                    }
-                } else {
-                    throw new Error(`HLS not available: ${response.status}`);
-                }
-            })
-            .catch(err => {
-                console.log('HLS not available, using native streaming:', err.message);
-                fallbackToNativeStreaming();
-            });
-
         // Increment view count on page load
         fetch(`/api/increment-view/${shortId}`, { method: 'POST' })
             .then(res => res.json())
