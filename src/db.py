@@ -127,6 +127,42 @@ async def get_user_videos(user_id: int, filter: str = "all", search: str = "", l
     return _filter_master_videos(videos)
 
 
+async def get_encoded_videos(user_id: int, limit: int = 20, offset: int = 0):
+    """
+    Get videos that have been encoded/optimized for mobile.
+    
+    Args:
+        user_id: Telegram user ID
+        limit: Number of videos to return
+        offset: Offset for pagination
+        
+    Returns:
+        List of encoded video metadata
+    """
+    sb = await get_database()
+    
+    # Supabase JSONB filtering syntax: metadata->>'is_encoded' eq 'true'
+    # Note: Depending on how boolean is stored in JSONB, it might be true (bool) or 'true' (string)
+    # The transcoder sets it as boolean True.
+    # In PostgREST/Supabase, we can use `is` filter on JSON path or `eq`.
+    # Let's try matching the JSON structure.
+    
+    query = sb.table(VIDEO_TABLE).select("*")
+    if not _is_super_admin(user_id):
+        query = query.eq("user_id", user_id)
+    
+    # Filter for is_encoded: true in metadata
+    # The arrow operator ->> returns text, so 'true'
+    query = query.eq("metadata->>is_encoded", "true")
+    
+    query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
+    
+    result = await query.execute()
+    
+    videos = result.data if result.data else []
+    return _filter_master_videos(videos)
+
+
 async def search_user_videos(user_id: int, keyword: str, limit: int = 10):
     """
     Search videos by title for a specific user.

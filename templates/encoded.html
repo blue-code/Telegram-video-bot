@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Encoded Videos - TVB</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+
+        .top-nav {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 12px 16px;
+            background: rgba(0, 0, 0, 0.35);
+            border-radius: 12px;
+            margin-bottom: 20px;
+        }
+
+        .top-nav .brand {
+            font-weight: 700;
+            color: #fff;
+            text-decoration: none;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .nav-links a {
+            color: #fff;
+            text-decoration: none;
+            font-size: 14px;
+            padding: 6px 10px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .nav-links a:hover {
+            background: rgba(255, 255, 255, 0.18);
+        }
+
+        .nav-links a.active {
+            background: rgba(255, 255, 255, 0.25);
+            font-weight: 500;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .page-header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .page-title {
+            font-size: 36px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+
+        .page-subtitle {
+            font-size: 16px;
+            color: #e0e0e0;
+        }
+
+        .video-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .video-item {
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(10px);
+            border-radius: 12px;
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            transition: all 0.2s;
+        }
+
+        .video-item:hover {
+            background: rgba(0, 0, 0, 0.5);
+            transform: translateX(5px);
+        }
+
+        .video-thumb {
+            width: 160px;
+            height: 90px;
+            border-radius: 8px;
+            overflow: hidden;
+            flex-shrink: 0;
+            background: #000;
+            position: relative;
+        }
+
+        .video-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .video-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .video-title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 5px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #fff;
+            text-decoration: none;
+        }
+
+        .video-meta {
+            font-size: 14px;
+            color: #aaa;
+            display: flex;
+            gap: 15px;
+        }
+
+        .video-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            transition: background 0.2s;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5a6fd1;
+        }
+
+        .btn-danger {
+            background: rgba(220, 53, 69, 0.2);
+            color: #ff6b6b;
+            border: 1px solid rgba(220, 53, 69, 0.3);
+        }
+
+        .btn-danger:hover {
+            background: rgba(220, 53, 69, 0.4);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        @media (max-width: 768px) {
+            .video-item {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            .video-thumb {
+                width: 100%;
+                height: auto;
+                aspect-ratio: 16/9;
+            }
+            .video-actions {
+                width: 100%;
+                justify-content: flex-end;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="top-nav">
+            <a class="brand" href="/dashboard/{{ user_id }}">TVB</a>
+            <div class="nav-links">
+                <a href="/dashboard/{{ user_id }}">대시보드</a>
+                <a href="/gallery/{{ user_id }}">갤러리</a>
+                <a href="/encoded/{{ user_id }}" class="active">인코딩됨</a>
+                <a href="/search?user_id={{ user_id }}">검색</a>
+                <a href="/download?user_id={{ user_id }}">다운로드/업로드</a>
+            </div>
+        </nav>
+
+        <div class="page-header">
+            <h1 class="page-title">📱 Optimized Videos</h1>
+            <p class="page-subtitle">Manage mobile-optimized videos to save space</p>
+        </div>
+
+        <div class="video-list">
+            {% if videos %}
+                {% for video in videos %}
+                <div class="video-item" id="video-{{ video.short_id }}">
+                    <a href="/watch/{{ video.short_id }}" class="video-thumb">
+                        {% if video.thumbnail %}
+                        <img src="{{ video.thumbnail }}" alt="{{ video.title }}">
+                        {% else %}
+                        <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#222;">🎬</div>
+                        {% endif %}
+                    </a>
+                    <div class="video-info">
+                        <div class="video-title" title="{{ video.title }}">{{ video.title }}</div>
+                        <div class="video-meta">
+                            <span>⏱️ {{ video.duration_formatted }}</span>
+                            <span>💾 {{ video.size_mb }} MB</span>
+                            <span>📅 {{ video.date }}</span>
+                        </div>
+                    </div>
+                    <div class="video-actions">
+                        <a href="/watch/{{ video.short_id }}" class="btn btn-primary">
+                            <span>▶️</span> Play
+                        </a>
+                        <a href="/download/{{ video.short_id }}" class="btn btn-secondary">
+                            <span>⬇️</span> Download
+                        </a>
+                        <button onclick="deleteEncoded('{{ video.short_id }}')" class="btn btn-danger">
+                            <span>🗑️</span> Remove Optimization
+                        </button>
+                    </div>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state">
+                    <div style="font-size: 64px; margin-bottom: 20px;">📭</div>
+                    <p>No encoded videos found.</p>
+                    <p>Optimize videos from the player to see them here.</p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- PWA Install Prompt -->
+    <script src="/static/pwa-install.js"></script>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/service-worker.js');
+        }
+
+        async function deleteEncoded(shortId) {
+            if (!confirm('Are you sure you want to delete the optimized file?\nThe original video will remain, but mobile playback might be slower.')) {
+                return;
+            }
+
+            try {
+                const res = await fetch(`/api/encoded/delete/${shortId}`, {
+                    method: 'DELETE'
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    // Remove item from list
+                    const item = document.getElementById(`video-${shortId}`);
+                    if (item) {
+                        item.style.opacity = '0';
+                        setTimeout(() => item.remove(), 300);
+                    }
+                } else {
+                    alert('Failed to delete: ' + data.message);
+                }
+            } catch (err) {
+                console.error(err);
+                alert('Error deleting file');
+            }
+        }
+    </script>
+</body>
+</html>

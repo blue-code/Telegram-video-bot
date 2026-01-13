@@ -138,35 +138,7 @@
             fill: currentColor;
         }
 
-        .share-toast {
-            position: fixed;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.9);
-            color: #fff;
-            padding: 12px 24px;
-            border-radius: 8px;
-            font-size: 14px;
-            display: none;
-            z-index: 1000;
-            animation: slideUp 0.3s ease;
-        }
 
-        .share-toast.show {
-            display: block;
-        }
-
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translate(-50%, 20px);
-            }
-            to {
-                opacity: 1;
-                transform: translate(-50%, 0);
-            }
-        }
 
         .video-container {
             position: relative;
@@ -343,6 +315,88 @@
                 left: 20px;
             }
         }
+
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .modal-overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .modal-content {
+            background: #1a202c;
+            padding: 24px;
+            border-radius: 12px;
+            width: 90%;
+            max-width: 400px;
+            transform: translateY(20px);
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .modal-overlay.active .modal-content {
+            transform: translateY(0);
+        }
+
+        .modal-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 16px;
+            color: #fff;
+        }
+
+        .resolution-options {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .resolution-option {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .resolution-option:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        .resolution-option.selected {
+            background: rgba(102, 126, 234, 0.2);
+            border-color: #667eea;
+        }
+
+        .resolution-option input {
+            margin-right: 12px;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
     </style>
 </head>
 <body>
@@ -351,10 +405,45 @@
         <div class="nav-links">
             <a href="/dashboard/{{ user_id }}">대시보드</a>
             <a href="/gallery/{{ user_id }}">갤러리</a>
+            <a href="/encoded/{{ user_id }}">인코딩됨</a>
             <a href="/search?user_id={{ user_id }}">검색</a>
             <a href="/download?user_id={{ user_id }}">다운로드/업로드</a>
         </div>
     </nav>
+    
+    <!-- Resolution Selection Modal -->
+    <div class="modal-overlay" id="resolution-modal">
+        <div class="modal-content">
+            <h3 class="modal-title">Select Resolution</h3>
+            <div class="resolution-options">
+                <label class="resolution-option selected">
+                    <input type="radio" name="resolution" value="720p" checked>
+                    <div>
+                        <div style="font-weight: 500;">720p HD (Recommended)</div>
+                        <div style="font-size: 0.8em; color: #aaa;">Best balance of quality and speed</div>
+                    </div>
+                </label>
+                <label class="resolution-option">
+                    <input type="radio" name="resolution" value="1080p">
+                    <div>
+                        <div style="font-weight: 500;">1080p Full HD</div>
+                        <div style="font-size: 0.8em; color: #aaa;">Higher quality, larger file size</div>
+                    </div>
+                </label>
+                <label class="resolution-option">
+                    <input type="radio" name="resolution" value="original">
+                    <div>
+                        <div style="font-weight: 500;">Original (Source)</div>
+                        <div style="font-size: 0.8em; color: #aaa;">Keep original resolution (re-encoded)</div>
+                    </div>
+                </label>
+            </div>
+            <div class="modal-actions">
+                <button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="confirmOptimization()">Start Optimization</button>
+            </div>
+        </div>
+    </div>
     <div class="container" id="container">
         <div class="player-wrapper">
             <div class="video-header">
@@ -377,20 +466,9 @@
                         <span>{{ upload_date }}</span>
                     </div>
                 </div>
-
-                <!-- 액션 버튼 -->
-                <div class="video-actions">
-                    <button class="action-btn" id="share-btn" onclick="shareVideo()">
-                        <svg viewBox="0 0 24 24">
-                            <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/>
-                        </svg>
-                        <span>공유</span>
-                    </button>
-                </div>
             </div>
 
-            <!-- 공유 토스트 메시지 -->
-            <div class="share-toast" id="share-toast"></div>
+
 
             <div class="video-container">
                 <video id="video-player" controls autoplay preload="auto" name="media">
@@ -525,28 +603,87 @@
             }
         });
 
-        async function requestOptimization() {
+        // Modal Logic
+        const modal = document.getElementById('resolution-modal');
+        const resolutionOptions = document.querySelectorAll('.resolution-option');
+        
+        // Handle option selection styling
+        if (resolutionOptions) {
+            resolutionOptions.forEach(option => {
+                option.addEventListener('click', () => {
+                    // Update radio button
+                    const radio = option.querySelector('input[type="radio"]');
+                    if (radio) radio.checked = true;
+                    
+                    // Update styles
+                    resolutionOptions.forEach(opt => opt.classList.remove('selected'));
+                    option.classList.add('selected');
+                });
+            });
+        }
+
+        function openModal() {
+            if (modal) modal.classList.add('active');
+        }
+
+        function closeModal() {
+            if (modal) modal.classList.remove('active');
+        }
+
+        // Close modal when clicking outside
+        if (modal) {
+            modal.addEventListener('click', (e) => {
+                if (e.target === modal) {
+                    closeModal();
+                }
+            });
+        }
+
+        function requestOptimization() {
+            openModal();
+        }
+
+        async function confirmOptimization() {
+            closeModal();
+            
             const btn = document.getElementById('optimize-btn');
-            btn.disabled = true;
-            btn.innerHTML = '<span>🔄</span><span>Processing...</span>';
+            const selectedOption = document.querySelector('input[name="resolution"]:checked');
+            const selectedResolution = selectedOption ? selectedOption.value : '720p';
+            
+            if (btn) {
+                btn.disabled = true;
+                btn.innerHTML = '<span>🔄</span><span>Processing...</span>';
+            }
             
             try {
-                const res = await fetch(`/api/reencode/${shortId}`, { method: 'POST' });
+                const res = await fetch(`/api/reencode/${shortId}`, { 
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        resolution: selectedResolution
+                    })
+                });
                 const data = await res.json();
                 
                 if (data.success) {
-                    showToast('🚀 Optimization started! You will be notified via Telegram.');
-                    btn.innerHTML = '<span>⏳</span><span>Working...</span>';
+                    showToast(`🚀 Optimization (${selectedResolution}) started! You will be notified via Telegram.`);
+                    if (btn) btn.innerHTML = '<span>⏳</span><span>Working...</span>';
                 } else {
                     showToast('❌ Failed: ' + data.message);
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>⚡</span><span>Optimize</span>';
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>⚡</span><span>Optimize</span>';
+                    }
                 }
             } catch (err) {
                 console.error(err);
                 showToast('❌ Error requesting optimization');
-                btn.disabled = false;
-                btn.innerHTML = '<span>⚡</span><span>Optimize</span>';
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>⚡</span><span>Optimize</span>';
+                }
             }
         }
 
@@ -954,13 +1091,15 @@
         // Share button
         shareBtn.addEventListener('click', async () => {
             const url = window.location.href;
+            const shareData = {
+                title: '{{ video_title }}',
+                text: '심리스 스트리밍으로 감상하세요! 🎬',
+                url: url
+            };
             
             if (navigator.share) {
                 try {
-                    await navigator.share({
-                        title: '{{ video_title }}',
-                        url: url
-                    });
+                    await navigator.share(shareData);
                 } catch (err) {
                     if (err.name !== 'AbortError') {
                         copyToClipboard(url);
@@ -972,11 +1111,33 @@
         });
 
         function copyToClipboard(text) {
-            navigator.clipboard.writeText(text).then(() => {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(text).then(() => {
+                    showToast('Link copied to clipboard!');
+                }).catch(() => {
+                    legacyCopyToClipboard(text);
+                });
+            } else {
+                legacyCopyToClipboard(text);
+            }
+        }
+
+        function legacyCopyToClipboard(text) {
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+
+            try {
+                document.execCommand('copy');
                 showToast('Link copied to clipboard!');
-            }).catch(() => {
+            } catch (err) {
                 showToast('Failed to copy link');
-            });
+            }
+
+            document.body.removeChild(textarea);
         }
 
         // Picture-in-Picture
@@ -1183,81 +1344,7 @@
     <!-- PWA Install Prompt -->
     <script src="/static/pwa-install.js"></script>
 
-    <!-- Share Video Function -->
-    <script>
-        function showToast(message) {
-            const toast = document.getElementById('share-toast');
-            toast.textContent = message;
-            toast.classList.add('show');
 
-            setTimeout(() => {
-                toast.classList.remove('show');
-            }, 3000);
-        }
-
-        async function shareVideo() {
-            const shareData = {
-                title: '{{ video_title }}',
-                text: '심리스 스트리밍으로 감상하세요! 🎬',
-                url: window.location.href
-            };
-
-            // Web Share API 지원 확인 (모바일)
-            if (navigator.share) {
-                try {
-                    await navigator.share(shareData);
-                    console.log('공유 완료');
-                } catch (err) {
-                    // 사용자가 취소한 경우
-                    if (err.name !== 'AbortError') {
-                        console.error('공유 실패:', err);
-                        fallbackCopyToClipboard();
-                    }
-                }
-            } else {
-                // Web Share API 미지원 (데스크톱) - 클립보드 복사
-                fallbackCopyToClipboard();
-            }
-        }
-
-        function fallbackCopyToClipboard() {
-            const url = window.location.href;
-
-            // Clipboard API 사용 (최신 브라우저)
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(url)
-                    .then(() => {
-                        showToast('✅ 링크가 클립보드에 복사되었습니다!');
-                    })
-                    .catch(err => {
-                        console.error('클립보드 복사 실패:', err);
-                        legacyCopyToClipboard(url);
-                    });
-            } else {
-                // Fallback: 구형 브라우저 지원
-                legacyCopyToClipboard(url);
-            }
-        }
-
-        function legacyCopyToClipboard(text) {
-            const textarea = document.createElement('textarea');
-            textarea.value = text;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-
-            try {
-                document.execCommand('copy');
-                showToast('✅ 링크가 클립보드에 복사되었습니다!');
-            } catch (err) {
-                console.error('복사 실패:', err);
-                showToast('❌ 링크 복사에 실패했습니다');
-            }
-
-            document.body.removeChild(textarea);
-        }
-    </script>
 
     <script>
         if ('serviceWorker' in navigator) {

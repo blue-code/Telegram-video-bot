@@ -824,6 +824,104 @@ async def gallery_default_page(request: Request):
     return await gallery_page(request, DEFAULT_USER_ID)
 
 
+@app.get("/encoded/{user_id}", response_class=HTMLResponse)
+async def encoded_page(request: Request, user_id: int):
+    """Page for managing encoded videos"""
+    from src.db import get_encoded_videos, get_database
+    from src.link_shortener import get_or_create_short_link
+
+    try:
+        sb = await get_database()
+        videos = await get_encoded_videos(user_id, limit=100)
+        
+        formatted_videos = []
+        for video in videos:
+            short_id = video.get('short_id', '')
+            if not short_id:
+                file_id = video.get('file_id')
+                if file_id:
+                    try:
+                        short_id = await get_or_create_short_link(
+                            sb,
+                            file_id,
+                            video.get('id'),
+                            user_id
+                        )
+                    except Exception:
+                        short_id = file_id or ''
+            
+            metadata = video.get("metadata") or {}
+            encoded_size = 0
+            encoded_path = metadata.get("encoded_path")
+            if encoded_path and os.path.exists(encoded_path):
+                encoded_size = os.path.getsize(encoded_path)
+
+            formatted_videos.append({
+                'id': video.get('id'),
+                'short_id': short_id,
+                'title': video.get('title', 'Unknown'),
+                'thumbnail': build_thumbnail_url(video.get('thumbnail', '')),
+                'duration_formatted': format_duration(video.get('duration', 0)),
+                'size_mb': round(encoded_size / (1024 * 1024), 1),
+                'date': format_date(video.get('created_at'))
+            })
+        
+        return templates.TemplateResponse("encoded.html", {
+            "request": request,
+            "user_id": user_id,
+            "videos": formatted_videos
+        })
+    except Exception as e:
+        logger.error(f"Error loading encoded page: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load encoded videos"
+        })
+
+
+@app.get("/encoded", response_class=HTMLResponse)
+async def encoded_default_page(request: Request):
+    """Default encoded page using fallback user_id"""
+    return await encoded_page(request, DEFAULT_USER_ID)
+
+
+@app.delete("/api/encoded/delete/{short_id}")
+async def delete_encoded_file(short_id: str, user_id: Optional[int] = Body(None)):
+    """Delete the encoded file only (keep original video)"""
+    from src.db import get_video_by_short_id, get_database
+    
+    try:
+        video = await get_video_by_short_id(short_id)
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+            
+        metadata = video.get("metadata") or {}
+        encoded_path = metadata.get("encoded_path")
+        
+        if encoded_path and os.path.exists(encoded_path):
+            try:
+                os.remove(encoded_path)
+                logger.info(f"Deleted encoded file: {encoded_path}")
+            except OSError as e:
+                logger.error(f"Failed to delete file {encoded_path}: {e}")
+                # Continue to update DB anyway
+        
+        # Update metadata
+        metadata["is_encoded"] = False
+        if "encoded_path" in metadata:
+            del metadata["encoded_path"]
+            
+        sb = await get_database()
+        await sb.table("videos").update({"metadata": metadata}).eq("id", video["id"]).execute()
+        
+        return {"success": True, "message": "Optimized file deleted"}
+        
+    except Exception as e:
+        logger.error(f"Error deleting encoded file: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/favorites/{user_id}", response_class=HTMLResponse)
 async def favorites_page(request: Request, user_id: int):
     """Favorites page showing user's favorite videos"""
@@ -961,16 +1059,31 @@ async def resolve_short_link(short_id: str):
 # Download endpoint
 @app.get("/download/{short_id}")
 async def download_video(short_id: str):
-    """Download video file directly"""
+    """Download video file directly (prioritize encoded file)"""
     from src.db import get_video_by_short_id
     
     try:
         video = await get_video_by_short_id(short_id)
-        
         if not video:
             raise HTTPException(status_code=404, detail="Video not found")
 
         metadata = video.get("metadata") or {}
+        
+        # 1. Check if encoded file exists
+        is_encoded = metadata.get("is_encoded", False)
+        encoded_path = metadata.get("encoded_path")
+        
+        if is_encoded and encoded_path and os.path.exists(encoded_path):
+            title = video.get('title', 'video')
+            filename = f"{title}.mp4".replace('/', '_').replace('\\', '_')
+            logger.info(f"Serving encoded file for download: {encoded_path}")
+            return FileResponse(
+                path=encoded_path,
+                filename=filename,
+                media_type="video/mp4"
+            )
+
+        # 2. Fallback to existing logic if not encoded
         parts = metadata.get("parts") or []
         if parts:
             title = video.get('title', 'video')
@@ -2481,12 +2594,17 @@ async def upload_file(
 
 
 @app.post("/api/reencode/{short_id}")
-async def reencode_video(short_id: str, background_tasks: BackgroundTasks, user_id: Optional[int] = Body(None)):
+async def reencode_video(
+    short_id: str, 
+    background_tasks: BackgroundTasks, 
+    user_id: Optional[int] = Body(None),
+    resolution: str = Body("720p")
+):
     """Trigger video re-encoding for mobile compatibility"""
     from src.db import get_video_by_short_id, get_database
     
     try:
-        logger.info(f"🔄 Re-encode request received for {short_id} (User: {user_id})")
+        logger.info(f"🔄 Re-encode request received for {short_id} (User: {user_id}, Res: {resolution})")
         
         video = await get_video_by_short_id(short_id)
         if not video:
@@ -2494,6 +2612,18 @@ async def reencode_video(short_id: str, background_tasks: BackgroundTasks, user_
             
         metadata = video.get("metadata") or {}
         if metadata.get("is_encoded") and os.path.exists(metadata.get("encoded_path", "")):
+            # If already encoded, we might want to allow re-encoding if resolution is different?
+            # For now, let's just return success if it's already done, but usually users want to force it.
+            # But the UI disables the button.
+            # If the user manually calls API, let's allow it if they really want, but current UI check prevents it.
+            # To allow re-encoding with different resolution, we should probably bypass this check if force param is present,
+            # or just proceed. But let's stick to the current logic: if encoded, say exists.
+            # Wait, if I want to change resolution, I need to be able to re-encode.
+            # Let's remove this check or make it smarter. 
+            # For now, I will keep it but maybe the user will delete the old one first?
+            # Actually, the user asked to select resolution. If they select one, it should probably proceed.
+            # But `templates/watch.html` disables the button if `is_encoded`.
+            # So this check is fine for the current flow (first time optimization).
             return {"success": True, "message": "Already encoded", "already_exists": True}
             
         # Start background task
@@ -2514,7 +2644,8 @@ async def reencode_video(short_id: str, background_tasks: BackgroundTasks, user_
             user_id=target_user_id,
             bot_token=token,
             base_url=BASE_URL,
-            db_client=sb
+            db_client=sb,
+            resolution=resolution
         )
         
         return {"success": True, "message": "Re-encoding started in background"}

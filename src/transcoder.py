@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import shutil
 import httpx
+import time
 from pathlib import Path
 from datetime import datetime, timedelta
 from telegram import Bot
@@ -51,12 +52,13 @@ async def transcode_video_task(
     user_id: int,
     bot_token: str,
     base_url: str,
-    db_client
+    db_client,
+    resolution: str = "720p"
 ):
     """
     Background task to download, concat (if needed), and transcode video.
     """
-    logger.info(f"🚀 Starting transcoding task for video {video_id} (User: {user_id})")
+    logger.info(f"🚀 Starting transcoding task for video {video_id} (User: {user_id}, Res: {resolution})")
     
     temp_dir = tempfile.mkdtemp()
     input_path = os.path.join(temp_dir, "input.mp4")
@@ -129,7 +131,7 @@ async def transcode_video_task(
                     raise Exception("Failed to download video file")
 
         # 3. Transcode (Re-encode)
-        logger.info("⚙️ Transcoding to H.264/AAC (720p, faststart)...")
+        logger.info(f"⚙️ Transcoding to H.264/AAC ({resolution}, faststart)...")
         
         # Verify input file
         if os.path.exists(input_path):
@@ -145,35 +147,70 @@ async def transcode_video_task(
         if not ffmpeg_exe:
             raise Exception("FFmpeg executable not found in PATH")
 
-        # -vf "scale='min(1280,iw)':-2": Resize to max 720p width, keep aspect ratio
+        # Prepare FFmpeg command based on resolution
         # -crf 26: Reasonable quality/size trade-off for mobile
         # -preset veryfast: Faster encoding
         transcode_cmd = [
             ffmpeg_exe, "-y",
             "-i", input_path,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-            "-vf", "scale='min(1280,iw)':-2",
             "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart",
-            temp_output_path
+            "-movflags", "+faststart"
         ]
+
+        # Apply scaling filter based on resolution
+        if resolution == "1080p":
+            transcode_cmd.extend(["-vf", "scale='min(1920,iw)':-2"])
+        elif resolution == "720p":
+            transcode_cmd.extend(["-vf", "scale='min(1280,iw)':-2"])
+        elif resolution == "original":
+            # No scaling filter, keep original resolution
+            pass
+        else:
+            # Default to 720p if unknown
+            logger.warning(f"Unknown resolution '{resolution}', defaulting to 720p")
+            transcode_cmd.extend(["-vf", "scale='min(1280,iw)':-2"])
+
+        transcode_cmd.append(temp_output_path)
         
         logger.info(f"   Command: {' '.join(transcode_cmd)}")
 
-        # Use asyncio.to_thread instead of create_subprocess_exec to avoid NotImplementedError on Windows
-        # and to keep it non-blocking
-        process_result = await asyncio.to_thread(
-            subprocess.run,
-            transcode_cmd,
-            capture_output=True
+        # Use create_subprocess_exec to monitor progress
+        process = await asyncio.create_subprocess_exec(
+            *transcode_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
         )
 
-        logger.info(f"   FFmpeg return code: {process_result.returncode}")
+        # Read stderr to log progress
+        last_log_time = time.time()
+        error_lines = []
         
-        if process_result.returncode != 0:
-            error_output = process_result.stderr.decode(errors='replace')
-            logger.error(f"FFmpeg Error Output: {error_output}")
-            raise Exception(f"Transcoding failed with code {process_result.returncode}")
+        while True:
+            line = await process.stderr.readline()
+            if not line:
+                break
+            
+            line_str = line.decode('utf-8', errors='replace').strip()
+            error_lines.append(line_str)
+            
+            # Keep error lines buffer small
+            if len(error_lines) > 50:
+                error_lines.pop(0)
+
+            # Log progress every 10 seconds
+            if 'time=' in line_str and (time.time() - last_log_time > 10):
+                logger.info(f"   Encoding progress: {line_str}")
+                last_log_time = time.time()
+
+        await process.wait()
+
+        logger.info(f"   FFmpeg return code: {process.returncode}")
+        
+        if process.returncode != 0:
+            error_output = "\n".join(error_lines)
+            logger.error(f"FFmpeg Error Output:\n{error_output}")
+            raise Exception(f"Transcoding failed with code {process.returncode}")
         # 4. Move to Cache
         if os.path.exists(temp_output_path):
             shutil.move(temp_output_path, final_output_path)
