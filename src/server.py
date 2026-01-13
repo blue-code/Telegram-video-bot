@@ -2318,6 +2318,66 @@ async def download_ready_file(task_id: str, filename: str):
     
     return HTMLResponse("<h1>File expired or not found</h1>", status_code=404)
 
+@app.get("/api/files/download/{file_id}")
+async def download_file_by_db_id(file_id: int):
+    """
+    Download file by DB ID. Handles split files by concatenating them.
+    """
+    from src.db import get_file_by_id
+    
+    try:
+        f = await get_file_by_id(file_id)
+        if not f:
+            raise HTTPException(status_code=404, detail="File not found")
+            
+        metadata = f.get("metadata") or {}
+        parts = metadata.get("parts")
+        filename = f.get("file_name", "download")
+        
+        if parts:
+            # Multi-part file: Stream concat
+            sorted_parts = sorted(parts, key=lambda x: x.get("part", 0))
+            tg_file_ids = [p["file_id"] for p in sorted_parts]
+            
+            download_urls = await asyncio.gather(
+                *[get_file_path_from_telegram(fid) for fid in tg_file_ids]
+            )
+            
+            async def iter_concat():
+                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0), follow_redirects=True) as client:
+                    for url in download_urls:
+                        async with client.stream("GET", url) as r:
+                            r.raise_for_status()
+                            async for chunk in r.aiter_bytes(chunk_size=65536):
+                                yield chunk
+                                
+            return StreamingResponse(
+                iter_concat(),
+                media_type="application/octet-stream",
+                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+            )
+            
+        else:
+            # Single file
+            tg_file_id = f.get("file_id")
+            download_url = await get_file_path_from_telegram(tg_file_id)
+            
+            async def iter_file():
+                async with httpx.AsyncClient(timeout=None) as client:
+                    async with client.stream("GET", download_url) as r:
+                        async for chunk in r.aiter_bytes():
+                            yield chunk
+                            
+            return StreamingResponse(
+                iter_file(),
+                media_type="application/octet-stream",
+                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+            )
+
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.delete("/api/files/{file_id}")
 async def delete_file_api(file_id: int, user_id: Optional[int] = Body(None)):
     from src.db import delete_file
