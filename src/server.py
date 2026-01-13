@@ -2489,22 +2489,20 @@ async def upload_file(
     file: UploadFile = File(...),
     user_id: Optional[int] = Form(None)
 ):
-    """Upload local video file to Telegram (not local storage)"""
+    """Upload local video file to Telegram with enhanced stability"""
     tmp_path = None
 
     try:
         if not user_id:
             user_id = DEFAULT_USER_ID
         
-        logger.info(f"Starting file upload. Admin User ID: {DEFAULT_USER_ID}")
+        logger.info(f"Starting video upload. Admin User ID: {DEFAULT_USER_ID}")
 
-        # Save to temporary file
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=Path(file.filename).suffix
-        ) as tmp_file:
-            shutil.copyfileobj(file.file, tmp_file)
-            tmp_path = tmp_file.name
+        # Async save to temp
+        tmp_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{file.filename}")
+        async with aiofiles.open(tmp_path, 'wb') as out_file:
+            while content := await file.read(1024 * 1024):  # 1MB chunks
+                await out_file.write(content)
 
         logger.info("Temporary file saved: %s", tmp_path)
 
@@ -2670,20 +2668,31 @@ async def upload_file(
             caption = (
                 f"📤 <b>Web Upload</b>\n📁 {part_label}\n👤 User: {user_id}"
             )
-            message = await send_with_retries(
-                lambda: send_document(path, caption),
-                "send_document"
-            )
+            
+            async def upload_task():
+                with open(path, "rb") as f:
+                    msg = await bot.send_document(
+                        chat_id=upload_chat_id,
+                        document=f,
+                        caption=caption,
+                        parse_mode=ParseMode.HTML,
+                        read_timeout=300,
+                        write_timeout=300
+                    )
+                    return msg
+
+            message = await send_with_retries(upload_task, "send_document")
+            
             if message.document:
                 return (message.document.file_id, 0, "")
             if message.video:
                 return (message.video.file_id, message.video.duration or 0, "")
-            logger.error(
-                "send_document returned no document/video for %s: %s",
-                part_label,
-                message.to_dict() if hasattr(message, "to_dict") else message
-            )
-            raise Exception("Telegram upload failed")
+            
+            # Try getting video if document is missing (sometimes send_document returns video object if mime matches)
+            # Actually python-telegram-bot send_document returns Message object
+            # If uploaded as document, it has .document. If video, .video.
+            # We force send_document, so it should be document or video.
+            raise Exception("Telegram upload failed (no document/video in response)")
 
         # Save metadata to database (single master record)
         from src.db import get_database
@@ -2841,8 +2850,10 @@ async def upload_file(
             cleanup_paths.add(thumbnail_temp_path)
         for path in cleanup_paths:
             if path and os.path.exists(path):
-                os.unlink(path)
-                logger.info("Temporary file deleted: %s", path)
+                try:
+                    os.unlink(path)
+                    logger.info("Temporary file deleted: %s", path)
+                except: pass
 
         message = "✅ Uploaded to Telegram successfully!"
 
