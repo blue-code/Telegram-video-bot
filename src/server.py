@@ -25,7 +25,7 @@ from telegram import Bot
 from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
 from src.transcoder import transcode_video_task, cleanup_old_encoded_files
-from src.file_manager import prepare_download_task, DOWNLOAD_CACHE_DIR
+from src.file_manager import prepare_download_task, DOWNLOAD_CACHE_DIR, cleanup_old_downloads
 import uuid
 import aiofiles
 
@@ -65,13 +65,14 @@ async def startup_event():
     else:
         logger.warning("⚠️ TELEGRAM_BOT_TOKEN not found. Bot features will be disabled.")
     
-    # Start cleanup task
+    # Start cleanup tasks
     try:
         from src.db import get_database
         sb = await get_database()
         asyncio.create_task(cleanup_old_encoded_files(sb))
+        asyncio.create_task(cleanup_old_downloads())
     except Exception as e:
-        logger.error(f"Failed to start cleanup task: {e}")
+        logger.error(f"Failed to start cleanup tasks: {e}")
 
 # Add CORS middleware
 app.add_middleware(

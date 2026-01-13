@@ -49,6 +49,7 @@
         .btn-primary { background: #667eea; }
         .btn-primary:hover { background: #5a6fd1; }
         .btn-danger { background: rgba(220,53,69,0.4); }
+        .btn-secondary { background: rgba(255,255,255,0.1); }
         
         .file-list { display: flex; flex-direction: column; gap: 8px; }
         .file-item {
@@ -147,8 +148,10 @@
                             {% if file.is_large %}
                                 <button class="btn" onclick="requestDownload([{{ file.id }}])">⬇️ 준비 요청</button>
                             {% else %}
-                                <button class="btn" onclick="directDownload({{ file.file_id }}, '{{ file.file_name }}')">⬇️ 받기</button>
+                                <button class="btn" onclick="directDownload({{ file.id }}, '{{ file.file_name }}')">⬇️ 받기</button>
                             {% endif %}
+                            <button class="btn btn-secondary" onclick="copyLink({{ file.id }})">🔗 복사</button>
+                            <button class="btn btn-danger" onclick="deleteFile({{ file.id }})">🗑️</button>
                         </div>
                     </div>
                     {% endfor %}
@@ -212,9 +215,10 @@
         }
 
         // Direct Download (Small files)
+        // Updated to use the smart download endpoint
         async function directDownload(fileId, fileName) {
             const a = document.createElement('a');
-            a.href = `/stream/${fileId}`;
+            a.href = `/api/files/download/${fileId}`; // Use new endpoint
             a.download = fileName;
             document.body.appendChild(a);
             a.click();
@@ -245,14 +249,32 @@
             requestDownload(selected);
         }
         
-        // Fix recursive call in requestMultiDownload
-        // It was calling itself recursively.
-        // Re-defining properly.
         window.requestMultiDownload = function() {
              const selected = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => parseInt(cb.value));
              requestDownload(selected);
         }
 
+        // Single file delete
+        async function deleteFile(fileId) {
+            if (!confirm('정말로 삭제하시겠습니까?')) return;
+            try {
+                const res = await fetch(`/api/files/${fileId}`, { 
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: userId})
+                });
+                const data = await res.json();
+                if (data.success) {
+                    location.reload();
+                } else {
+                    alert('삭제 실패');
+                }
+            } catch (e) {
+                alert('오류 발생');
+            }
+        }
+
+        // Batch delete
         async function deleteSelected() {
             const selected = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => cb.value);
             if (!selected.length) return;
@@ -266,6 +288,17 @@
                 });
             }
             location.reload();
+        }
+
+        // Copy Link
+        async function copyLink(fileId) {
+            const url = `${window.location.origin}/api/files/download/${fileId}`;
+            try {
+                await navigator.clipboard.writeText(url);
+                alert('링크가 복사되었습니다!\n' + url);
+            } catch (err) {
+                prompt('링크를 복사하세요:', url);
+            }
         }
     </script>
 </body>

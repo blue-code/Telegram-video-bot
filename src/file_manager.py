@@ -121,3 +121,31 @@ async def prepare_download_task(
     finally:
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
+
+async def cleanup_old_downloads():
+    """Delete files in download cache older than 7 days."""
+    logger.info("🧹 Cleaning up old downloads...")
+    try:
+        now = datetime.now().timestamp()
+        retention_days = 7
+        retention_seconds = retention_days * 86400
+        
+        if not DOWNLOAD_CACHE_DIR.exists():
+            return
+
+        count = 0
+        for item in DOWNLOAD_CACHE_DIR.iterdir():
+            if item.is_file():
+                mtime = item.stat().st_mtime
+                if now - mtime > retention_seconds:
+                    try:
+                        item.unlink()
+                        logger.info(f"Deleted expired download: {item.name}")
+                        count += 1
+                    except Exception as e:
+                        logger.error(f"Failed to delete {item.name}: {e}")
+        
+        if count > 0:
+            logger.info(f"✅ Cleanup complete. Removed {count} files.")
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
