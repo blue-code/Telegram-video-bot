@@ -2049,20 +2049,35 @@ async def files_page(
     q: str = "",
     date_from: str = "",
     date_to: str = "",
-    sort: str = "latest"
+    sort: str = "latest",
+    page: int = 1,
+    per_page: int = 20
 ):
-    """File management page with search and filters"""
-    from src.db import get_files, get_database
+    """File management page with search, filters, and pagination"""
+    from src.db import get_files, count_files
     
     try:
+        if page < 1: page = 1
+        offset = (page - 1) * per_page
+        
         files = await get_files(
             user_id=user_id, 
-            limit=100,
+            limit=per_page,
+            offset=offset,
             query=q,
             date_from=date_from,
             date_to=date_to,
             sort_by=sort
         )
+        
+        total_count = await count_files(
+            user_id=user_id,
+            query=q,
+            date_from=date_from,
+            date_to=date_to
+        )
+        
+        total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
         
         # Format for template
         formatted_files = []
@@ -2090,7 +2105,10 @@ async def files_page(
             "query": q,
             "date_from": date_from,
             "date_to": date_to,
-            "sort": sort
+            "sort": sort,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count
         })
     except Exception as e:
         logger.error(f"Error loading files page: {e}")
@@ -2333,6 +2351,7 @@ async def download_file_by_db_id(file_id: int):
         metadata = f.get("metadata") or {}
         parts = metadata.get("parts")
         filename = f.get("file_name", "download")
+        encoded_filename = quote(filename)
         
         if parts:
             # Multi-part file: Stream concat
@@ -2354,7 +2373,7 @@ async def download_file_by_db_id(file_id: int):
             return StreamingResponse(
                 iter_concat(),
                 media_type="application/octet-stream",
-                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
             )
             
         else:
@@ -2371,7 +2390,7 @@ async def download_file_by_db_id(file_id: int):
             return StreamingResponse(
                 iter_file(),
                 media_type="application/octet-stream",
-                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
             )
 
     except Exception as e:

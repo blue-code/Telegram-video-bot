@@ -111,6 +111,7 @@
             <!-- Filters -->
             <div class="filters">
                 <form id="filter-form" class="filter-form">
+                    <input type="hidden" name="page" id="page-input" value="{{ page }}">
                     <input type="text" name="q" class="filter-input" placeholder="Search files..." value="{{ query }}" style="flex: 1; min-width: 200px;">
                     <input type="date" name="date_from" class="filter-input" value="{{ date_from }}" title="Date From">
                     <input type="date" name="date_to" class="filter-input" value="{{ date_to }}" title="Date To">
@@ -165,6 +166,23 @@
                     </div>
                 {% endif %}
             </div>
+
+            <!-- Pagination -->
+            {% if total_pages > 1 %}
+            <div class="pagination" style="display: flex; justify-content: center; gap: 10px; margin-top: 20px;">
+                {% if page > 1 %}
+                <button class="btn btn-secondary" onclick="changePage({{ page - 1 }})">◀ Prev</button>
+                {% endif %}
+                
+                <span style="display: flex; align-items: center; color: #aaa; font-size: 14px;">
+                    Page {{ page }} of {{ total_pages }} ({{ total_count }} items)
+                </span>
+                
+                {% if page < total_pages %}
+                <button class="btn btn-secondary" onclick="changePage({{ page + 1 }})">Next ▶</button>
+                {% endif %}
+            </div>
+            {% endif %}
         </div>
     </div>
 
@@ -173,6 +191,11 @@
         
         function resetFilters() {
             window.location.href = `/files/${userId}`;
+        }
+
+        function changePage(newPage) {
+            document.getElementById('page-input').value = newPage;
+            document.getElementById('filter-form').submit();
         }
 
         // Upload Logic
@@ -215,10 +238,9 @@
         }
 
         // Direct Download (Small files)
-        // Updated to use the smart download endpoint
         async function directDownload(fileId, fileName) {
             const a = document.createElement('a');
-            a.href = `/api/files/download/${fileId}`; // Use new endpoint
+            a.href = `/api/files/download/${fileId}`;
             a.download = fileName;
             document.body.appendChild(a);
             a.click();

@@ -102,6 +102,31 @@ async def search_files(user_id: int, query: str, limit: int = 20):
     result = await q.order("created_at", desc=True).limit(limit).execute()
     return result.data if result.data else []
 
+async def count_files(
+    user_id: int,
+    query: str = None,
+    date_from: str = None,
+    date_to: str = None
+):
+    """
+    Count files matching criteria.
+    """
+    sb = await get_database()
+    q = sb.table(FILES_TABLE).select("id", count="exact")
+    
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+    
+    if query:
+        q = q.ilike("file_name", f"%{query}%")
+    if date_from:
+        q = q.gte("created_at", date_from)
+    if date_to:
+        q = q.lte("created_at", date_to)
+        
+    result = await q.execute()
+    return result.count if hasattr(result, 'count') else 0
+
 def _filter_master_videos(videos: list[dict]) -> list[dict]:
     """Filter out split part records (keep master or single entries)."""
     filtered = []
