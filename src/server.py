@@ -2041,12 +2041,26 @@ async def web_download(
 # General File Management Endpoints
 
 @app.get("/files/{user_id}", response_class=HTMLResponse)
-async def files_page(request: Request, user_id: int):
-    """File management page"""
-    from src.db import get_files
+async def files_page(
+    request: Request, 
+    user_id: int,
+    q: str = "",
+    date_from: str = "",
+    date_to: str = "",
+    sort: str = "latest"
+):
+    """File management page with search and filters"""
+    from src.db import get_files, get_database
     
     try:
-        files = await get_files(user_id, limit=100)
+        files = await get_files(
+            user_id=user_id, 
+            limit=100,
+            query=q,
+            date_from=date_from,
+            date_to=date_to,
+            sort_by=sort
+        )
         
         # Format for template
         formatted_files = []
@@ -2070,7 +2084,11 @@ async def files_page(request: Request, user_id: int):
         return templates.TemplateResponse("files.html", {
             "request": request,
             "user_id": user_id,
-            "files": formatted_files
+            "files": formatted_files,
+            "query": q,
+            "date_from": date_from,
+            "date_to": date_to,
+            "sort": sort
         })
     except Exception as e:
         logger.error(f"Error loading files page: {e}")

@@ -14,17 +14,52 @@ client: AsyncClient = None
 
 # ... (existing functions) ...
 
-async def get_files(user_id: int, limit: int = 20, offset: int = 0):
+async def get_files(
+    user_id: int, 
+    limit: int = 20, 
+    offset: int = 0,
+    query: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    sort_by: str = "latest"
+):
     """
-    Get generic files for a user.
+    Get generic files for a user with filtering and sorting.
     """
     sb = await get_database()
-    query = sb.table(FILES_TABLE).select("*")
-    if not _is_super_admin(user_id):
-        query = query.eq("user_id", user_id)
+    q = sb.table(FILES_TABLE).select("*")
     
-    query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
-    result = await query.execute()
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+    
+    # Text search
+    if query:
+        q = q.ilike("file_name", f"%{query}%")
+    
+    # Date range filter
+    if date_from:
+        q = q.gte("created_at", date_from)
+    if date_to:
+        q = q.lte("created_at", date_to)
+    
+    # Sorting
+    if sort_by == "latest":
+        q = q.order("created_at", desc=True)
+    elif sort_by == "oldest":
+        q = q.order("created_at", desc=False)
+    elif sort_by == "name_asc":
+        q = q.order("file_name", desc=False)
+    elif sort_by == "name_desc":
+        q = q.order("file_name", desc=True)
+    elif sort_by == "size_desc":
+        q = q.order("file_size", desc=True)
+    elif sort_by == "size_asc":
+        q = q.order("file_size", desc=False)
+    else:
+        q = q.order("created_at", desc=True)
+    
+    q = q.range(offset, offset + limit - 1)
+    result = await q.execute()
     return result.data if result.data else []
 
 async def add_file(file_data: dict):
