@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>File Manager - TVB</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        /* Base styles from dashboard */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container { max-width: 1200px; margin: 0 auto; }
+        
+        /* Nav */
+        .top-nav {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; background: rgba(0,0,0,0.35);
+            border-radius: 12px; margin-bottom: 20px;
+        }
+        .top-nav .brand { font-weight: 700; color: #fff; text-decoration: none; }
+        .nav-links a {
+            color: #fff; text-decoration: none; font-size: 14px;
+            padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.08);
+            margin-left: 5px;
+        }
+        .nav-links a:hover, .nav-links a.active { background: rgba(255,255,255,0.25); }
+
+        /* File List */
+        .file-manager {
+            background: rgba(0,0,0,0.4); backdrop-filter: blur(10px);
+            border-radius: 12px; padding: 20px;
+        }
+        .toolbar {
+            display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap;
+        }
+        .btn {
+            padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
+            font-size: 14px; color: #fff; background: rgba(255,255,255,0.1);
+            transition: 0.2s;
+        }
+        .btn:hover { background: rgba(255,255,255,0.2); }
+        .btn-primary { background: #667eea; }
+        .btn-primary:hover { background: #5a6fd1; }
+        .btn-danger { background: rgba(220,53,69,0.4); }
+        
+        .file-list { display: flex; flex-direction: column; gap: 8px; }
+        .file-item {
+            display: flex; align-items: center; padding: 12px;
+            background: rgba(255,255,255,0.05); border-radius: 8px;
+            transition: 0.2s;
+        }
+        .file-item:hover { background: rgba(255,255,255,0.1); }
+        .file-checkbox { margin-right: 15px; transform: scale(1.2); }
+        .file-icon { font-size: 24px; margin-right: 15px; }
+        .file-info { flex: 1; min-width: 0; }
+        .file-name { font-weight: 500; margin-bottom: 4px; overflow:hidden; text-overflow:ellipsis; }
+        .file-meta { font-size: 12px; color: #aaa; }
+        .file-actions { display: flex; gap: 8px; }
+
+        /* Upload Area */
+        .upload-area {
+            border: 2px dashed rgba(255,255,255,0.3);
+            border-radius: 8px; padding: 30px; text-align: center;
+            margin-bottom: 20px; cursor: pointer; transition: 0.2s;
+        }
+        .upload-area:hover { border-color: #fff; background: rgba(255,255,255,0.05); }
+        
+        /* Modal */
+        .modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); align-items: center; justify-content: center;
+        }
+        .modal.active { display: flex; }
+        .modal-content {
+            background: #2d3748; padding: 24px; border-radius: 12px; width: 90%; max-width: 400px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="top-nav">
+            <a class="brand" href="/dashboard/{{ user_id }}">TVB</a>
+            <div class="nav-links">
+                <a href="/dashboard/{{ user_id }}">대시보드</a>
+                <a href="/gallery/{{ user_id }}">갤러리</a>
+                <a href="/encoded/{{ user_id }}">인코딩됨</a>
+                <a href="/files/{{ user_id }}" class="active">파일</a>
+                <a href="/search?user_id={{ user_id }}">검색</a>
+                <a href="/download?user_id={{ user_id }}">다운로드/업로드</a>
+            </div>
+        </nav>
+
+        <div class="file-manager">
+            <div class="upload-area" id="drop-zone">
+                <div style="font-size: 32px; margin-bottom: 10px;">📤</div>
+                <p>파일을 여기에 드래그하거나 클릭하여 업로드하세요</p>
+                <input type="file" id="file-input" multiple style="display: none;">
+            </div>
+
+            <div class="toolbar">
+                <button class="btn btn-primary" onclick="requestMultiDownload()">선택 다운로드 (Zip)</button>
+                <button class="btn btn-danger" onclick="deleteSelected()">선택 삭제</button>
+                <span style="flex:1"></span>
+                <span id="status-msg"></span>
+            </div>
+
+            <div class="file-list">
+                {% if files %}
+                    {% for file in files %}
+                    <div class="file-item">
+                        <input type="checkbox" class="file-checkbox" value="{{ file.id }}">
+                        <div class="file-icon">📄</div>
+                        <div class="file-info">
+                            <div class="file-name">{{ file.file_name }}</div>
+                            <div class="file-meta">{{ file.file_size_fmt }} • {{ file.created_at }}</div>
+                        </div>
+                        <div class="file-actions">
+                            {% if file.is_large %}
+                                <button class="btn" onclick="requestDownload([{{ file.id }}])">⬇️ 준비 요청</button>
+                            {% else %}
+                                <button class="btn" onclick="directDownload({{ file.file_id }}, '{{ file.file_name }}')">⬇️ 받기</button>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div style="text-align: center; padding: 40px; color: #aaa;">파일이 없습니다.</div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const userId = {{ user_id }};
+        
+        // Upload Logic
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        
+        dropZone.onclick = () => fileInput.click();
+        
+        fileInput.onchange = async (e) => handleUpload(e.target.files);
+        
+        dropZone.ondragover = (e) => { e.preventDefault(); dropZone.style.borderColor = '#fff'; };
+        dropZone.ondragleave = () => { dropZone.style.borderColor = 'rgba(255,255,255,0.3)'; };
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.style.borderColor = 'rgba(255,255,255,0.3)';
+            handleUpload(e.dataTransfer.files);
+        };
+
+        async function handleUpload(files) {
+            if (!files.length) return;
+            const status = document.getElementById('status-msg');
+            
+            for (let file of files) {
+                status.textContent = `업로드 중: ${file.name}...`;
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('user_id', userId);
+                
+                try {
+                    const res = await fetch('/api/files/upload', { method: 'POST', body: formData });
+                    const data = await res.json();
+                    if (!data.success) alert('업로드 실패: ' + data.message);
+                } catch (e) {
+                    console.error(e);
+                    alert('업로드 중 오류 발생');
+                }
+            }
+            status.textContent = '완료! 새로고침 중...';
+            location.reload();
+        }
+
+        // Direct Download (Small files)
+        async function directDownload(fileId, fileName) {
+            // Need a direct proxy endpoint or reuse /stream/ ?
+            // Since we stored file_id in `files` table, we can use /download/ endpoint logic?
+            // But /download/{short_id} expects a short_id from `shared_links`. 
+            // We need a generic download endpoint for `file_id`. 
+            // Currently server.py has /stream/{file_id} which proxies.
+            // Let's use that for direct download.
+            window.location.href = `/stream/${fileId}`; 
+            // Actually stream endpoint might render in browser. 
+            // Force download by creating a link with download attr?
+            // Or create a new endpoint? 
+            // Let's create an anchor tag.
+            const a = document.createElement('a');
+            a.href = `/stream/${fileId}`;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        // Request Download (Large/Multi)
+        async function requestDownload(fileIds) {
+            if (!fileIds.length) return alert('선택된 파일이 없습니다.');
+            
+            if (!confirm(`다운로드 준비를 요청하시겠습니까? (${fileIds.length}개)
+준비가 완료되면 텔레그램으로 알림이 전송됩니다.`)) return;
+
+            try {
+                const res = await fetch('/api/files/prepare-download', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ file_ids: fileIds, user_id: userId })
+                });
+                const data = await res.json();
+                alert(data.message);
+            } catch (e) {
+                alert('요청 실패');
+            }
+        }
+
+        function requestMultiDownload() {
+            const selected = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => parseInt(cb.value));
+            requestDownload(selected);
+        }
+
+        async function deleteSelected() {
+            const selected = Array.from(document.querySelectorAll('.file-checkbox:checked')).map(cb => cb.value);
+            if (!selected.length) return;
+            if (!confirm('선택한 파일을 삭제하시겠습니까?')) return;
+
+            for (let id of selected) {
+                await fetch(`/api/files/${id}`, { 
+                    method: 'DELETE',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({user_id: userId})
+                });
+            }
+            location.reload();
+        }
+    </script>
+</body>
+</html>

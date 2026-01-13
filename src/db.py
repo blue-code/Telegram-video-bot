@@ -7,9 +7,65 @@ load_dotenv()
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 VIDEO_TABLE = "videos"
+FILES_TABLE = "files"
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
 
 client: AsyncClient = None
+
+# ... (existing functions) ...
+
+async def get_files(user_id: int, limit: int = 20, offset: int = 0):
+    """
+    Get generic files for a user.
+    """
+    sb = await get_database()
+    query = sb.table(FILES_TABLE).select("*")
+    if not _is_super_admin(user_id):
+        query = query.eq("user_id", user_id)
+    
+    query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
+    result = await query.execute()
+    return result.data if result.data else []
+
+async def add_file(file_data: dict):
+    """
+    Add a new file record.
+    """
+    sb = await get_database()
+    result = await sb.table(FILES_TABLE).insert(file_data).execute()
+    return result.data[0] if result.data else None
+
+async def delete_file(file_id: int, user_id: int):
+    """
+    Delete a file record.
+    """
+    sb = await get_database()
+    query = sb.table(FILES_TABLE).delete().eq("id", file_id)
+    if not _is_super_admin(user_id):
+        query = query.eq("user_id", user_id)
+    
+    result = await query.execute()
+    return bool(result.data)
+
+async def get_file_by_id(file_id: int):
+    """
+    Get file metadata by ID.
+    """
+    sb = await get_database()
+    result = await sb.table(FILES_TABLE).select("*").eq("id", file_id).execute()
+    return result.data[0] if result.data else None
+
+async def search_files(user_id: int, query: str, limit: int = 20):
+    """
+    Search files by name.
+    """
+    sb = await get_database()
+    q = sb.table(FILES_TABLE).select("*").ilike("file_name", f"%{query}%")
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+    
+    result = await q.order("created_at", desc=True).limit(limit).execute()
+    return result.data if result.data else []
 
 def _filter_master_videos(videos: list[dict]) -> list[dict]:
     """Filter out split part records (keep master or single entries)."""

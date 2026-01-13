@@ -25,6 +25,8 @@ from telegram import Bot
 from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
 from src.transcoder import transcode_video_task, cleanup_old_encoded_files
+from src.file_manager import prepare_download_task, DOWNLOAD_CACHE_DIR
+import uuid
 
 # Initialize
 load_dotenv()
@@ -2034,6 +2036,230 @@ async def web_download(
             "task_id": task_id,
             "message": f"Download failed: {str(e)}"
         }
+
+
+# General File Management Endpoints
+
+@app.get("/files/{user_id}", response_class=HTMLResponse)
+async def files_page(request: Request, user_id: int):
+    """File management page"""
+    from src.db import get_files
+    
+    try:
+        files = await get_files(user_id, limit=100)
+        
+        # Format for template
+        formatted_files = []
+        for f in files:
+            # Check if large/multi-part
+            metadata = f.get("metadata") or {}
+            is_large = False
+            if metadata.get("parts") and len(metadata["parts"]) > 1:
+                is_large = True
+            
+            formatted_files.append({
+                "id": f["id"],
+                "file_id": f["file_id"],
+                "file_name": f["file_name"],
+                "file_size": f["file_size"],
+                "file_size_fmt": f"{f['file_size'] / (1024*1024):.1f} MB" if f['file_size'] else "Unknown",
+                "created_at": format_date(f["created_at"]),
+                "is_large": is_large
+            })
+
+        return templates.TemplateResponse("files.html", {
+            "request": request,
+            "user_id": user_id,
+            "files": formatted_files
+        })
+    except Exception as e:
+        logger.error(f"Error loading files page: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load files"
+        })
+
+@app.get("/files", response_class=HTMLResponse)
+async def files_default_page(request: Request):
+    return await files_page(request, DEFAULT_USER_ID)
+
+@app.post("/api/files/upload")
+async def upload_general_file(
+    file: UploadFile = File(...),
+    user_id: Optional[int] = Form(None)
+):
+    """Upload general file to Telegram (files table)"""
+    tmp_path = None
+    try:
+        if not user_id:
+            user_id = DEFAULT_USER_ID
+        
+        logger.info(f"Starting general file upload: {file.filename}")
+
+        # Save to temp
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
+            shutil.copyfileobj(file.file, tmp_file)
+            tmp_path = tmp_file.name
+
+        file_size = os.path.getsize(tmp_path)
+        parts = [tmp_path]
+        
+        # Split if needed
+        if file_size > MAX_WEB_UPLOAD_SIZE:
+             chunk_size = MAX_WEB_UPLOAD_SIZE
+             parts = []
+             with open(tmp_path, 'rb') as f:
+                 part_num = 1
+                 while True:
+                     chunk = f.read(chunk_size)
+                     if not chunk: break
+                     part_name = f"{tmp_path}.part{part_num}"
+                     with open(part_name, 'wb') as p:
+                         p.write(chunk)
+                     parts.append(part_name)
+                     part_num += 1
+             if len(parts) == 1:
+                 os.unlink(parts[0])
+                 parts = [tmp_path]
+             else:
+                 logger.info(f"Split generic file into {len(parts)} parts")
+
+        # Telegram Upload
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        bin_channel_id = os.getenv("BIN_CHANNEL_ID")
+        upload_chat_id = int(bin_channel_id) if bin_channel_id else user_id
+        
+        request = HTTPXRequest(connect_timeout=60, read_timeout=600, write_timeout=600)
+        bot = Bot(token=bot_token, request=request)
+
+        file_ids = []
+        
+        for i, part_path in enumerate(parts):
+            with open(part_path, "rb") as f:
+                caption = f"📁 <b>File Upload</b>\n📄 {file.filename} ({i+1}/{len(parts)})"
+                msg = await bot.send_document(
+                    chat_id=upload_chat_id,
+                    document=f,
+                    filename=f"{file.filename}.part{i+1}" if len(parts) > 1 else file.filename,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML
+                )
+                file_ids.append(msg.document.file_id)
+
+        # Cleanup parts
+        for p in parts:
+            if p != tmp_path and os.path.exists(p):
+                os.unlink(p)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+
+        # DB Entry
+        from src.db import add_file
+        
+        metadata = None
+        if len(parts) > 1:
+            metadata = {
+                "parts": [
+                    {"file_id": fid, "part": i+1} for i, fid in enumerate(file_ids)
+                ]
+            }
+        
+        file_data = {
+            "user_id": user_id,
+            "file_id": file_ids[0],
+            "file_name": file.filename,
+            "file_size": file_size,
+            "mime_type": file.content_type,
+            "metadata": metadata
+        }
+        
+        await add_file(file_data)
+        
+        if DEFAULT_USER_ID:
+             try:
+                 await bot.send_message(
+                    chat_id=DEFAULT_USER_ID,
+                    text=f"✅ <b>파일 업로드 완료!</b>\n📄 {file.filename} ({file_size/1024/1024:.1f}MB)",
+                    parse_mode=ParseMode.HTML
+                )
+             except: pass
+
+        return {"success": True, "message": "File uploaded"}
+
+    except Exception as e:
+        logger.error(f"File upload error: {e}")
+        if tmp_path and os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/files/prepare-download")
+async def prepare_download_api(
+    background_tasks: BackgroundTasks,
+    request: Request
+):
+    from src.db import get_file_by_id
+    
+    try:
+        data = await request.json()
+        target_ids = data.get("file_ids", [])
+        user_id = data.get("user_id") or DEFAULT_USER_ID
+        
+        if not target_ids:
+            return {"success": False, "message": "No files selected"}
+
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
+        files_info = []
+        
+        for db_id in target_ids:
+            f = await get_file_by_id(db_id)
+            if not f: continue
+            
+            metadata = f.get("metadata") or {}
+            parts = metadata.get("parts")
+            
+            if parts:
+                sorted_parts = sorted(parts, key=lambda x: x.get("part", 0))
+                part_ids = [p["file_id"] for p in sorted_parts]
+                files_info.append({"name": f["file_name"], "parts": part_ids})
+            else:
+                files_info.append({"name": f["file_name"], "parts": [f["file_id"]]})
+        
+        task_id = str(uuid.uuid4())
+        
+        background_tasks.add_task(
+            prepare_download_task,
+            task_id=task_id,
+            files_info=files_info,
+            user_id=user_id,
+            bot_token=bot_token,
+            base_url=BASE_URL
+        )
+        
+        return {"success": True, "message": "다운로드 준비 시작! 완료되면 텔레그램으로 알려드립니다."}
+        
+    except Exception as e:
+        logger.error(f"Prepare download error: {e}")
+        return {"success": False, "message": str(e)}
+
+@app.get("/api/files/download_ready/{task_id}/{filename}")
+async def download_ready_file(task_id: str, filename: str):
+    path = DOWNLOAD_CACHE_DIR / filename
+    # Also try zip if extension doesn't match? No, filename comes from URL.
+    # But prepare_task might have renamed collision.
+    # Trust filename in URL.
+    
+    if path.exists():
+        return FileResponse(path, filename=filename)
+    
+    return HTMLResponse("<h1>File expired or not found</h1>", status_code=404)
+
+@app.delete("/api/files/{file_id}")
+async def delete_file_api(file_id: int, user_id: Optional[int] = Body(None)):
+    from src.db import delete_file
+    if not user_id: user_id = DEFAULT_USER_ID
+    success = await delete_file(file_id, user_id)
+    return {"success": success}
 
 
 # Phase 1: Dashboard Page
