@@ -27,6 +27,7 @@ from telegram.constants import ParseMode
 from src.transcoder import transcode_video_task, cleanup_old_encoded_files
 from src.file_manager import prepare_download_task, DOWNLOAD_CACHE_DIR
 import uuid
+import aiofiles
 
 # Initialize
 load_dotenv()
@@ -2107,7 +2108,7 @@ async def upload_general_file(
     file: UploadFile = File(...),
     user_id: Optional[int] = Form(None)
 ):
-    """Upload general file to Telegram (files table)"""
+    """Upload general file to Telegram (files table) with enhanced stability"""
     tmp_path = None
     try:
         if not user_id:
@@ -2115,10 +2116,11 @@ async def upload_general_file(
         
         logger.info(f"Starting general file upload: {file.filename}")
 
-        # Save to temp
-        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(file.filename).suffix) as tmp_file:
-            shutil.copyfileobj(file.file, tmp_file)
-            tmp_path = tmp_file.name
+        # Async save to temp
+        tmp_path = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}_{file.filename}")
+        async with aiofiles.open(tmp_path, 'wb') as out_file:
+            while content := await file.read(1024 * 1024):  # 1MB chunks
+                await out_file.write(content)
 
         file_size = os.path.getsize(tmp_path)
         parts = [tmp_path]
@@ -2151,19 +2153,60 @@ async def upload_general_file(
         request = HTTPXRequest(connect_timeout=60, read_timeout=600, write_timeout=600)
         bot = Bot(token=bot_token, request=request)
 
+        async def send_with_retries(send_func, label):
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    return await send_func()
+                except Exception as send_error:
+                    last_error = send_error
+                    if attempt < 3:
+                        logger.warning(
+                            "%s attempt %s/3 failed: %s",
+                            label,
+                            attempt,
+                            send_error
+                        )
+                        await asyncio.sleep(2 * attempt)
+            raise last_error
+
+        async def send_document(path, caption):
+            with open(path, "rb") as f:
+                return await bot.send_document(
+                    chat_id=upload_chat_id,
+                    document=f,
+                    filename=os.path.basename(path), # Use actual part filename
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    read_timeout=300,
+                    write_timeout=300
+                )
+
         file_ids = []
         
         for i, part_path in enumerate(parts):
-            with open(part_path, "rb") as f:
-                caption = f"📁 <b>File Upload</b>\n📄 {file.filename} ({i+1}/{len(parts)})"
-                msg = await bot.send_document(
-                    chat_id=upload_chat_id,
-                    document=f,
-                    filename=f"{file.filename}.part{i+1}" if len(parts) > 1 else file.filename,
-                    caption=caption,
-                    parse_mode=ParseMode.HTML
-                )
-                file_ids.append(msg.document.file_id)
+            # Filename for part
+            part_filename = file.filename
+            if len(parts) > 1:
+                part_filename = f"{file.filename}.part{i+1}"
+
+            caption = f"📁 <b>File Upload</b>\n📄 {file.filename} ({i+1}/{len(parts)})"
+            
+            # Helper to wrap send_document with correct args
+            async def upload_task():
+                with open(part_path, "rb") as f:
+                    return await bot.send_document(
+                        chat_id=upload_chat_id,
+                        document=f,
+                        filename=part_filename,
+                        caption=caption,
+                        parse_mode=ParseMode.HTML,
+                        read_timeout=300,
+                        write_timeout=300
+                    )
+
+            msg = await send_with_retries(upload_task, f"upload_part_{i+1}")
+            file_ids.append(msg.document.file_id)
 
         # Cleanup parts
         for p in parts:
@@ -2208,7 +2251,9 @@ async def upload_general_file(
     except Exception as e:
         logger.error(f"File upload error: {e}")
         if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except: pass
         return {"success": False, "message": str(e)}
 
 @app.post("/api/files/prepare-download")
