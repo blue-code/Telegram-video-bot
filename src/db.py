@@ -33,9 +33,11 @@ async def get_files(
     if not _is_super_admin(user_id):
         q = q.eq("user_id", user_id)
     
-    # Text search
+    # Text search (file_name OR metadata->author OR metadata->book_title)
     if query:
-        q = q.ilike("file_name", f"%{query}%")
+        # Construct OR filter for PostgREST
+        search_filter = f"file_name.ilike.%{query}%,metadata->>author.ilike.%{query}%,metadata->>book_title.ilike.%{query}%"
+        q = q.or_(search_filter)
     
     # Extension filter
     if ext:
@@ -151,7 +153,8 @@ async def count_files(
     user_id: int,
     query: str = None,
     date_from: str = None,
-    date_to: str = None
+    date_to: str = None,
+    ext: str = None
 ):
     """
     Count files matching criteria.
@@ -163,11 +166,18 @@ async def count_files(
         q = q.eq("user_id", user_id)
     
     if query:
-        q = q.ilike("file_name", f"%{query}%")
+        # Same OR filter as get_files
+        search_filter = f"file_name.ilike.%{query}%,metadata->>author.ilike.%{query}%,metadata->>book_title.ilike.%{query}%"
+        q = q.or_(search_filter)
+        
     if date_from:
         q = q.gte("created_at", date_from)
     if date_to:
         q = q.lte("created_at", date_to)
+        
+    if ext:
+        if ext == "epub":
+            q = q.ilike("file_name", "%.epub")
         
     result = await q.execute()
     return result.count if hasattr(result, 'count') else 0

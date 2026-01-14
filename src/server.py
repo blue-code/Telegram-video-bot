@@ -26,6 +26,7 @@ from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
 from src.transcoder import transcode_video_task, cleanup_old_encoded_files
 from src.file_manager import prepare_download_task, DOWNLOAD_CACHE_DIR, cleanup_old_downloads
+from src.epub_parser import get_epub_metadata
 import uuid
 import aiofiles
 
@@ -2114,6 +2115,75 @@ async def save_progress_api(
         logger.error(f"Save progress error: {e}")
         return {"success": False, "message": str(e)}
 
+@app.get("/books/{user_id}", response_class=HTMLResponse)
+async def books_page(
+    request: Request,
+    user_id: int,
+    page: int = 1,
+    per_page: int = 20,
+    q: str = ""
+):
+    from src.db import get_files, count_files
+    
+    try:
+        if page < 1: page = 1
+        offset = (page - 1) * per_page
+        
+        books = await get_files(
+            user_id=user_id,
+            limit=per_page,
+            offset=offset,
+            query=q,
+            ext="epub"
+        )
+        
+        total_count = await count_files(
+            user_id=user_id,
+            query=q,
+            ext="epub"
+        )
+        
+        total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
+        
+        formatted_books = []
+        for b in books:
+            metadata = b.get("metadata") or {}
+            
+            # Format cover URL
+            cover_url = ""
+            cover_file_id = metadata.get("cover_file_id")
+            if cover_file_id:
+                cover_url = f"/thumb/{cover_file_id}"
+            
+            formatted_books.append({
+                "id": b["id"],
+                "title": metadata.get("book_title") or b["file_name"],
+                "author": metadata.get("author") or "Unknown",
+                "cover_url": cover_url,
+                "size_mb": f"{b['file_size'] / (1024*1024):.1f}" if b.get('file_size') else ""
+            })
+            
+        return templates.TemplateResponse("books.html", {
+            "request": request,
+            "user_id": user_id,
+            "books": formatted_books,
+            "page": page,
+            "total_pages": total_pages,
+            "total_count": total_count,
+            "query": q
+        })
+    except Exception as e:
+        logger.error(f"Error loading books page: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load books"
+        })
+
+@app.get("/books", response_class=HTMLResponse)
+async def books_default_page(request: Request):
+    return await books_page(request, DEFAULT_USER_ID)
+
 @app.get("/files/{user_id}", response_class=HTMLResponse)
 async def files_page(
     request: Request, 
@@ -2259,50 +2329,30 @@ async def upload_general_file(
                 except Exception as send_error:
                     last_error = send_error
                     if attempt < 3:
-                        logger.warning(
-                            "%s attempt %s/3 failed: %s",
-                            label,
-                            attempt,
-                            send_error
-                        )
+                        logger.warning(f"{label} attempt {attempt}/3 failed: {send_error}")
                         await asyncio.sleep(2 * attempt)
             raise last_error
-
-        async def send_document(path, caption):
-            with open(path, "rb") as f:
-                return await bot.send_document(
-                    chat_id=upload_chat_id,
-                    document=f,
-                    filename=os.path.basename(path), # Use actual part filename
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    read_timeout=300,
-                    write_timeout=300
-                )
 
         file_ids = []
         
         for i, part_path in enumerate(parts):
-            # Filename for part
-            part_filename = file.filename
+            filename_part = file.filename
             if len(parts) > 1:
-                part_filename = f"{file.filename}.part{i+1}"
-
-            caption = f"📁 <b>File Upload</b>\n📄 {file.filename} ({i+1}/{len(parts)})"
-            
-            # Helper to wrap send_document with correct args
+                filename_part += f".part{i+1}"
+                
             async def upload_task():
                 with open(part_path, "rb") as f:
+                    caption = f"📁 <b>File Upload</b>\n📄 {file.filename} ({i+1}/{len(parts)})"
                     return await bot.send_document(
                         chat_id=upload_chat_id,
                         document=f,
-                        filename=part_filename,
+                        filename=filename_part,
                         caption=caption,
                         parse_mode=ParseMode.HTML,
                         read_timeout=300,
                         write_timeout=300
                     )
-
+            
             msg = await send_with_retries(upload_task, f"upload_part_{i+1}")
             file_ids.append(msg.document.file_id)
 
@@ -2310,31 +2360,66 @@ async def upload_general_file(
         for p in parts:
             if p != tmp_path and os.path.exists(p):
                 os.unlink(p)
+        
+        # EPUB Metadata Extraction (before deleting main temp file)
+        metadata = {}
+        if file.filename.lower().endswith('.epub'):
+            try:
+                # Extract metadata from the temp file we saved earlier
+                epub_meta = await asyncio.to_thread(get_epub_metadata, tmp_path)
+                
+                if epub_meta.get('title'):
+                    metadata['book_title'] = epub_meta['title']
+                if epub_meta.get('author'):
+                    metadata['author'] = epub_meta['author']
+                
+                # Upload cover if exists
+                if epub_meta.get('cover_bytes'):
+                    cover_ext = epub_meta.get('cover_ext', '.jpg')
+                    with tempfile.NamedTemporaryFile(suffix=cover_ext, delete=False) as tmp_cover:
+                        tmp_cover.write(epub_meta['cover_bytes'])
+                        tmp_cover_path = tmp_cover.name
+                    
+                    try:
+                        async def upload_cover():
+                            with open(tmp_cover_path, 'rb') as c:
+                                return await bot.send_photo(
+                                    chat_id=upload_chat_id,
+                                    photo=c,
+                                    caption=f"🖼️ Cover: {file.filename}"
+                                )
+                        
+                        cover_msg = await send_with_retries(upload_cover, "upload_cover")
+                        if cover_msg.photo:
+                            metadata['cover_file_id'] = cover_msg.photo[-1].file_id
+                    finally:
+                        if os.path.exists(tmp_cover_path):
+                            os.unlink(tmp_cover_path)
+            except Exception as e:
+                logger.error(f"Failed to extract EPUB metadata: {e}")
+
+        # Cleanup main temp file
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
         # DB Entry
         from src.db import add_file
         
-        metadata = None
         if len(parts) > 1:
-            metadata = {
-                "parts": [
-                    {"file_id": fid, "part": i+1} for i, fid in enumerate(file_ids)
-                ]
-            }
+            metadata["parts"] = [{"file_id": fid, "part": i+1} for i, fid in enumerate(file_ids)]
         
         file_data = {
             "user_id": user_id,
-            "file_id": file_ids[0],
+            "file_id": file_ids[0], # Master ID
             "file_name": file.filename,
             "file_size": file_size,
             "mime_type": file.content_type,
-            "metadata": metadata
+            "metadata": metadata if metadata else None
         }
         
         await add_file(file_data)
         
+        # Notify
         if DEFAULT_USER_ID:
              try:
                  await bot.send_message(
