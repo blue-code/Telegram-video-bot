@@ -57,3 +57,29 @@
   - [x] Sub-task: 플레이리스트 URL 감지 및 메타데이터 추출 로직 구현
   - [x] Sub-task: 배치 다운로드 관리자(Queue) 구현
   - [x] Sub-task: 스트리밍 링크 버튼 추가 (Phase 7 연동)
+
+## Phase 9: 모바일 최적화 및 관리
+- [x] Task: 모바일 재생 최적화 (Re-encoding)
+  - [x] Sub-task: 해상도 선택(720p/1080p/Original) 및 FFmpeg 인코딩 구현
+  - [x] Sub-task: 실시간 인코딩 진행 상황 로깅 및 알림
+- [x] Task: 인코딩된 영상 관리
+  - [x] Sub-task: '인코딩됨' 전용 메뉴 및 관리(재생/삭제) 기능 구현
+  - [x] Sub-task: 다운로드 시 최적화 파일 우선 제공 로직 추가
+
+## Phase 10: 일반 파일 관리 및 안정성
+- [x] Task: 일반 파일 관리 시스템
+  - [x] Sub-task: 파일 업로드 API (15MB 분할 지원) 및 DB 연동
+  - [x] Sub-task: 파일 관리 페이지 (검색, 필터, 정렬, 페이지네이션) 구현
+- [x] Task: 다운로드 및 안정성 개선
+  - [x] Sub-task: 다중 파일 ZIP 다운로드 및 대용량 파일 준비 알림 시스템
+  - [x] Sub-task: 업로드 안정성 개선 (aiofiles 비동기 처리, Retry 로직)
+  - [x] Sub-task: 오래된 다운로드 캐시 자동 삭제 (7일)
+
+## Phase 11: eBook 라이브러리 및 리더
+- [x] Task: eBook 라이브러리 구축
+  - [x] Sub-task: EPUB 메타데이터(표지, 제목, 작가) 추출기 구현
+  - [x] Sub-task: eBook 전용 그리드 뷰 및 검색 페이지 구현
+- [x] Task: 웹 EPUB 리더 구현
+  - [x] Sub-task: epub.js 기반 뷰어 및 터치/메뉴 인터페이스 구현
+  - [x] Sub-task: 독서 진행 상황(CFI) 자동 저장 및 이어보기 기능 구현
+  - [x] Sub-task: 뷰어 로딩 안정성 개선 (Blob loading)
