@@ -2419,6 +2419,7 @@ async def download_ready_file(task_id: str, filename: str):
 async def download_file_by_db_id(file_id: int):
     """
     Download file by DB ID. Handles split files by concatenating them.
+    For EPUBs, caches locally to support random access/Range requests.
     """
     from src.db import get_file_by_id
     
@@ -2431,7 +2432,56 @@ async def download_file_by_db_id(file_id: int):
         parts = metadata.get("parts")
         filename = f.get("file_name", "download")
         encoded_filename = quote(filename)
+        is_epub = filename.lower().endswith(".epub")
+        media_type = "application/epub+zip" if is_epub else "application/octet-stream"
         
+        # If EPUB, cache it locally first to support seeking/epub.js
+        if is_epub:
+            cache_path = DOWNLOAD_CACHE_DIR / filename
+            if cache_path.exists():
+                return FileResponse(
+                    path=cache_path,
+                    media_type=media_type,
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+                )
+            
+            # Need to download/concat to cache
+            temp_path = str(cache_path) + ".tmp"
+            try:
+                if parts:
+                    sorted_parts = sorted(parts, key=lambda x: x.get("part", 0))
+                    tg_file_ids = [p["file_id"] for p in sorted_parts]
+                    download_urls = await asyncio.gather(*[get_file_path_from_telegram(fid) for fid in tg_file_ids])
+                    
+                    async with aiofiles.open(temp_path, 'wb') as outfile:
+                        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, read=600.0), follow_redirects=True) as client:
+                            for url in download_urls:
+                                async with client.stream("GET", url) as r:
+                                    r.raise_for_status()
+                                    async for chunk in r.aiter_bytes(chunk_size=65536):
+                                        await outfile.write(chunk)
+                else:
+                    tg_file_id = f.get("file_id")
+                    download_url = await get_file_path_from_telegram(tg_file_id)
+                    async with aiofiles.open(temp_path, 'wb') as outfile:
+                        async with httpx.AsyncClient(timeout=None) as client:
+                            async with client.stream("GET", download_url) as r:
+                                r.raise_for_status()
+                                async for chunk in r.aiter_bytes():
+                                    await outfile.write(chunk)
+                
+                os.rename(temp_path, cache_path)
+                return FileResponse(
+                    path=cache_path,
+                    media_type=media_type,
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
+                )
+            except Exception as e:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                raise e
+
+        # Non-EPUB: Streaming (existing logic)
         if parts:
             # Multi-part file: Stream concat
             sorted_parts = sorted(parts, key=lambda x: x.get("part", 0))
@@ -2451,7 +2501,7 @@ async def download_file_by_db_id(file_id: int):
                                 
             return StreamingResponse(
                 iter_concat(),
-                media_type="application/octet-stream",
+                media_type=media_type,
                 headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
             )
             
@@ -2468,7 +2518,7 @@ async def download_file_by_db_id(file_id: int):
                             
             return StreamingResponse(
                 iter_file(),
-                media_type="application/octet-stream",
+                media_type=media_type,
                 headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"}
             )
 

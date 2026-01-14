@@ -200,56 +200,96 @@
 
     <script>
         const bookUrl = "{{ book_url }}";
-        const initialCfi = "{{ initial_cfi }}" !== "None" ? "{{ initial_cfi }}" : null;
+        const initialCfiStr = "{{ initial_cfi }}";
+        const initialCfi = (initialCfiStr && initialCfiStr !== "None" && initialCfiStr !== "null") ? initialCfiStr : undefined;
         const fileId = {{ file_id }};
         const userId = {{ user_id }};
-
-        // Initialize ePub
-        const book = ePub(bookUrl);
-        const rendition = book.renderTo("viewer", {
-            width: "100%",
-            height: "100%",
-            flow: "paginated",
-            manager: "default"
-        });
 
         // State
         let currentTheme = 'dark';
         let currentFontSize = 100;
-        let themes = {
+        const themes = {
             light: { body: { background: '#fff', color: '#000' } },
             sepia: { body: { background: '#f4ecd8', color: '#5b4636' } },
             dark: { body: { background: '#1a1a1a', color: '#ccc' } }
         };
 
-        // Render
-        rendition.display(initialCfi).then(() => {
-            document.getElementById('loading').style.display = 'none';
-            applySettings();
-        }).catch(err => {
-            console.error(err);
-            alert('Error loading book');
-        });
+        // Fetch book as ArrayBuffer
+        fetch(bookUrl)
+            .then(response => {
+                if (!response.ok) throw new Error('Network response was not ok');
+                return response.arrayBuffer();
+            })
+            .then(arrayBuffer => {
+                // Initialize ePub with ArrayBuffer
+                const book = ePub(arrayBuffer);
+                const rendition = book.renderTo("viewer", {
+                    width: "100%",
+                    height: "100%",
+                    flow: "paginated",
+                    manager: "default"
+                });
 
-        // Theme Registration
-        rendition.themes.register("light", themes.light);
-        rendition.themes.register("sepia", themes.sepia);
-        rendition.themes.register("dark", themes.dark);
+                // Assign to global for event handlers
+                window.book = book;
+                window.rendition = rendition;
 
-        // Navigation
-        const prevZone = document.getElementById('prev-zone');
-        const nextZone = document.getElementById('next-zone');
-        const menuZone = document.getElementById('menu-zone');
+                // Render
+                const startPromise = initialCfi ? rendition.display(initialCfi) : rendition.display();
+                
+                startPromise.then(() => {
+                    document.getElementById('loading').style.display = 'none';
+                    applySettings();
+                }).catch(err => {
+                    console.warn('Display error with CFI, trying from beginning:', err);
+                    rendition.display().then(() => {
+                        document.getElementById('loading').style.display = 'none';
+                        applySettings();
+                    }).catch(fatalErr => {
+                        console.error('Fatal display error:', fatalErr);
+                        alert('Error rendering book: ' + fatalErr.message);
+                    });
+                });
 
-        prevZone.addEventListener('click', () => rendition.prev());
-        nextZone.addEventListener('click', () => rendition.next());
-        menuZone.addEventListener('click', toggleMenu);
+                // Theme Registration
+                rendition.themes.register("light", themes.light);
+                rendition.themes.register("sepia", themes.sepia);
+                rendition.themes.register("dark", themes.dark);
 
-        // Keyboard support
-        document.addEventListener('keyup', (e) => {
-            if ((e.keyCode || e.which) == 37) rendition.prev();
-            if ((e.keyCode || e.which) == 39) rendition.next();
-        });
+                // Navigation
+                const prevZone = document.getElementById('prev-zone');
+                const nextZone = document.getElementById('next-zone');
+                const menuZone = document.getElementById('menu-zone');
+
+                prevZone.addEventListener('click', () => rendition.prev());
+                nextZone.addEventListener('click', () => rendition.next());
+                menuZone.addEventListener('click', toggleMenu);
+
+                // Keyboard support
+                document.addEventListener('keyup', (e) => {
+                    if ((e.keyCode || e.which) == 37) rendition.prev();
+                    if ((e.keyCode || e.which) == 39) rendition.next();
+                });
+
+                // Progress Tracking
+                rendition.on('relocated', (location) => {
+                    const percent = location.start.percentage;
+                    const cfi = location.start.cfi;
+                    
+                    // Update UI
+                    if (document.getElementById('progress-bar')) {
+                        document.getElementById('progress-bar').style.width = (percent * 100) + "%";
+                    }
+
+                    // Save to server
+                    saveProgress(cfi, percent);
+                });
+            })
+            .catch(err => {
+                console.error('Download error:', err);
+                alert('Failed to download book: ' + err.message);
+                document.getElementById('loading').style.display = 'none';
+            });
 
         // Menu Toggle
         function toggleMenu() {
@@ -271,10 +311,10 @@
         // Settings Functions
         function setTheme(theme) {
             currentTheme = theme;
-            rendition.themes.select(theme);
-            
-            // Update body bg to match
-            document.body.style.background = themes[theme].body.background;
+            if (window.rendition) {
+                window.rendition.themes.select(theme);
+                document.body.style.background = themes[theme].body.background;
+            }
             
             // Update buttons
             document.querySelectorAll('.theme-btn').forEach(btn => {
@@ -287,31 +327,18 @@
             currentFontSize += (dir * 10);
             if (currentFontSize < 50) currentFontSize = 50;
             if (currentFontSize > 200) currentFontSize = 200;
-            rendition.themes.fontSize(currentFontSize + "%");
+            if (window.rendition) window.rendition.themes.fontSize(currentFontSize + "%");
             document.getElementById('fs-val').innerText = currentFontSize + "%";
         }
 
         function setFont(font) {
-            rendition.themes.font(font);
+            if (window.rendition) window.rendition.themes.font(font);
         }
 
         function applySettings() {
             setTheme(currentTheme);
-            rendition.themes.fontSize(currentFontSize + "%");
+            changeFontSize(0); 
         }
-
-        // Progress Tracking
-        rendition.on('relocated', (location) => {
-            const percent = location.start.percentage;
-            const cfi = location.start.cfi;
-            
-            // Update UI
-            document.getElementById('progress-bar').style.width = (percent * 100) + "%";
-            // document.getElementById('page-info').innerText = (percent * 100).toFixed(1) + "%"; // optional
-
-            // Save to server
-            saveProgress(cfi, percent);
-        });
 
         let saveTimeout;
         function saveProgress(cfi, percent) {
@@ -327,7 +354,7 @@
                         percent: percent * 100
                     })
                 }).catch(err => console.error('Failed to save progress', err));
-            }, 1000); // Debounce saves
+            }, 1000); 
         }
     </script>
 </body>

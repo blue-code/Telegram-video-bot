@@ -9,3 +9,6 @@ CREATE TABLE reading_progress (
 );
 
 CREATE INDEX idx_reading_progress_user ON reading_progress(user_id);
+
+ALTER TABLE public.reading_progress ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Enable all for reading_progress" ON public.reading_progress FOR ALL USING (true) WITH CHECK (true);
