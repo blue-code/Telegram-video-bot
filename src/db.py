@@ -39,10 +39,10 @@ async def get_files(
         search_filter = f"file_name.ilike.%{query}%,metadata->>author.ilike.%{query}%,metadata->>book_title.ilike.%{query}%"
         q = q.or_(search_filter)
     
-    # Extension filter
-    if ext:
-        if ext == "epub":
-            q = q.ilike("file_name", "%.epub")
+    # Extension filter - Disabled due to Cloudflare 500 error
+    # if ext:
+    #    if ext == "epub":
+    #        q = q.like("file_name", "%.epub")
         # Add more extensions here if needed
     
     # Date range filter
@@ -175,9 +175,10 @@ async def count_files(
     if date_to:
         q = q.lte("created_at", date_to)
         
-    if ext:
-        if ext == "epub":
-            q = q.ilike("file_name", "%.epub")
+    # Extension filter - Disabled due to Cloudflare 500 error
+    # if ext:
+    #    if ext == "epub":
+    #        q = q.like("file_name", "%.epub")
         
     result = await q.execute()
     return result.count if hasattr(result, 'count') else 0

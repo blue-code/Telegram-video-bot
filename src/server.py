@@ -2127,26 +2127,32 @@ async def books_page(
     
     try:
         if page < 1: page = 1
-        offset = (page - 1) * per_page
         
-        books = await get_files(
+        # Workaround for Cloudflare 500 error on %.epub queries
+        # Fetch larger dataset and filter in Python
+        fetch_limit = 1000
+        
+        all_files = await get_files(
             user_id=user_id,
-            limit=per_page,
-            offset=offset,
+            limit=fetch_limit,
+            offset=0, # Ignore DB offset
             query=q,
-            ext="epub"
+            ext="epub" # Ignored by DB, used as intent marker
         )
         
-        total_count = await count_files(
-            user_id=user_id,
-            query=q,
-            ext="epub"
-        )
+        # Python Filtering
+        books = [f for f in all_files if f.get('file_name', '').lower().endswith('.epub')]
+        
+        # Manual Pagination
+        total_count = len(books)
+        start = (page - 1) * per_page
+        end = start + per_page
+        paginated_books = books[start:end]
         
         total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
         
         formatted_books = []
-        for b in books:
+        for b in paginated_books:
             metadata = b.get("metadata") or {}
             
             # Format cover URL
@@ -2201,25 +2207,49 @@ async def files_page(
     
     try:
         if page < 1: page = 1
-        offset = (page - 1) * per_page
         
-        files = await get_files(
-            user_id=user_id, 
-            limit=per_page,
-            offset=offset,
-            query=q,
-            date_from=date_from,
-            date_to=date_to,
-            sort_by=sort,
-            ext=ext
-        )
-        
-        total_count = await count_files(
-            user_id=user_id,
-            query=q,
-            date_from=date_from,
-            date_to=date_to
-        )
+        if ext:
+            # Python Filtering Workaround
+            fetch_limit = 1000
+            all_files = await get_files(
+                user_id=user_id, 
+                limit=fetch_limit,
+                offset=0,
+                query=q,
+                date_from=date_from,
+                date_to=date_to,
+                sort_by=sort,
+                ext=ext
+            )
+            
+            # Filter
+            target_ext = f".{ext.lower()}"
+            filtered_files = [f for f in all_files if f.get('file_name', '').lower().endswith(target_ext)]
+            
+            # Paginate
+            total_count = len(filtered_files)
+            start = (page - 1) * per_page
+            end = start + per_page
+            files = filtered_files[start:end]
+            
+        else:
+            # Standard DB Pagination
+            offset = (page - 1) * per_page
+            files = await get_files(
+                user_id=user_id, 
+                limit=per_page,
+                offset=offset,
+                query=q,
+                date_from=date_from,
+                date_to=date_to,
+                sort_by=sort
+            )
+            total_count = await count_files(
+                user_id=user_id,
+                query=q,
+                date_from=date_from,
+                date_to=date_to
+            )
         
         total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
         
