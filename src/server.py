@@ -2042,6 +2042,78 @@ async def web_download(
 
 # General File Management Endpoints
 
+# EPUB Reader Routes
+
+@app.get("/read/{file_id}", response_class=HTMLResponse)
+async def reader_page(request: Request, file_id: int):
+    """EPUB Reader page"""
+    from src.db import get_file_by_id, get_reading_progress
+    
+    try:
+        f = await get_file_by_id(file_id)
+        if not f:
+            return templates.TemplateResponse("error.html", {
+                "request": request,
+                "error_code": 404,
+                "error_message": "Book not found"
+            })
+            
+        # Get progress
+        # We need user_id from somewhere. 
+        # For now, relying on DEFAULT_USER_ID or passed query param? 
+        # The URL /read/{file_id} doesn't have user_id. 
+        # Let's assume DEFAULT_USER_ID if no auth middleware is strictly enforcing user context yet.
+        # Ideally, user_id should be in session or query param.
+        # Let's add user_id query param support for consistency with other pages.
+        user_id = int(request.query_params.get("user_id", DEFAULT_USER_ID))
+        
+        progress = await get_reading_progress(user_id, file_id)
+        initial_cfi = progress['cfi'] if progress else None
+        
+        # Download URL for the file (proxied)
+        # We use the existing download/stream endpoint logic
+        book_url = f"/api/files/download/{file_id}"
+        
+        return templates.TemplateResponse("reader.html", {
+            "request": request,
+            "file_id": file_id,
+            "user_id": user_id,
+            "title": f.get("file_name", "Book"),
+            "book_url": book_url,
+            "initial_cfi": initial_cfi
+        })
+    except Exception as e:
+        logger.error(f"Error loading reader: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load reader"
+        })
+
+@app.get("/api/epub/progress/{file_id}")
+async def get_progress_api(file_id: int, user_id: int = DEFAULT_USER_ID):
+    from src.db import get_reading_progress
+    try:
+        progress = await get_reading_progress(user_id, file_id)
+        return {"success": True, "data": progress}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@app.post("/api/epub/progress")
+async def save_progress_api(
+    file_id: int = Body(...),
+    user_id: int = Body(...),
+    cfi: str = Body(...),
+    percent: float = Body(...)
+):
+    from src.db import save_reading_progress
+    try:
+        await save_reading_progress(user_id, file_id, cfi, percent)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Save progress error: {e}")
+        return {"success": False, "message": str(e)}
+
 @app.get("/files/{user_id}", response_class=HTMLResponse)
 async def files_page(
     request: Request, 
@@ -2051,9 +2123,10 @@ async def files_page(
     date_to: str = "",
     sort: str = "latest",
     page: int = 1,
-    per_page: int = 20
+    per_page: int = 20,
+    ext: str = ""
 ):
-    """File management page with search, filters, and pagination"""
+    """File management page with search, filters, pagination, and type filter"""
     from src.db import get_files, count_files
     
     try:
@@ -2067,7 +2140,8 @@ async def files_page(
             query=q,
             date_from=date_from,
             date_to=date_to,
-            sort_by=sort
+            sort_by=sort,
+            ext=ext
         )
         
         total_count = await count_files(
@@ -2088,6 +2162,9 @@ async def files_page(
             if metadata.get("parts") and len(metadata["parts"]) > 1:
                 is_large = True
             
+            # Check if epub
+            is_epub = f.get("file_name", "").lower().endswith(".epub")
+            
             formatted_files.append({
                 "id": f["id"],
                 "file_id": f["file_id"],
@@ -2095,7 +2172,8 @@ async def files_page(
                 "file_size": f["file_size"],
                 "file_size_fmt": f"{f['file_size'] / (1024*1024):.1f} MB" if f['file_size'] else "Unknown",
                 "created_at": format_date(f["created_at"]),
-                "is_large": is_large
+                "is_large": is_large,
+                "is_epub": is_epub
             })
 
         return templates.TemplateResponse("files.html", {
@@ -2108,7 +2186,8 @@ async def files_page(
             "sort": sort,
             "page": page,
             "total_pages": total_pages,
-            "total_count": total_count
+            "total_count": total_count,
+            "ext": ext
         })
     except Exception as e:
         logger.error(f"Error loading files page: {e}")
@@ -2410,7 +2489,7 @@ async def delete_file_api(file_id: int, user_id: Optional[int] = Body(None)):
 async def dashboard_page(request: Request, user_id: int):
     """User dashboard with statistics and quick access"""
     from src.user_manager import get_user_stats
-    from src.db import get_database, get_user_videos
+    from src.db import get_database, get_user_videos, get_recent_reading
     from src.link_shortener import get_or_create_short_link
     
     try:
@@ -2420,6 +2499,15 @@ async def dashboard_page(request: Request, user_id: int):
         
         # Get recent videos
         recent_videos = await get_user_videos(user_id, limit=5)
+        
+        # Get recent reading
+        recent_reading = await get_recent_reading(user_id)
+        if recent_reading:
+            # Format file info
+            file_info = recent_reading.get('files')
+            if file_info:
+                recent_reading['title'] = file_info.get('file_name', 'Unknown Book')
+                recent_reading['percent_fmt'] = f"{recent_reading.get('percent', 0):.1f}%"
         
         # Format videos
         formatted_videos = []
@@ -2457,7 +2545,8 @@ async def dashboard_page(request: Request, user_id: int):
             "request": request,
             "user_id": user_id,
             "stats": stats,
-            "recent_videos": formatted_videos
+            "recent_videos": formatted_videos,
+            "recent_reading": recent_reading
         })
     except Exception as e:
         logger.error(f"Dashboard error: {e}")

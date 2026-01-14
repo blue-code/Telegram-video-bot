@@ -21,7 +21,8 @@ async def get_files(
     query: str = None,
     date_from: str = None,
     date_to: str = None,
-    sort_by: str = "latest"
+    sort_by: str = "latest",
+    ext: str = None
 ):
     """
     Get generic files for a user with filtering and sorting.
@@ -35,6 +36,12 @@ async def get_files(
     # Text search
     if query:
         q = q.ilike("file_name", f"%{query}%")
+    
+    # Extension filter
+    if ext:
+        if ext == "epub":
+            q = q.ilike("file_name", "%.epub")
+        # Add more extensions here if needed
     
     # Date range filter
     if date_from:
@@ -61,6 +68,44 @@ async def get_files(
     q = q.range(offset, offset + limit - 1)
     result = await q.execute()
     return result.data if result.data else []
+
+async def save_reading_progress(user_id: int, file_id: int, cfi: str, percent: float):
+    """Save or update reading progress."""
+    sb = await get_database()
+    
+    # Check if exists
+    existing = await sb.table("reading_progress").select("id").eq("user_id", user_id).eq("file_id", file_id).execute()
+    
+    data = {
+        "user_id": user_id,
+        "file_id": file_id,
+        "cfi": cfi,
+        "percent": percent,
+        "updated_at": "now()"
+    }
+    
+    if existing.data:
+        # Update
+        await sb.table("reading_progress").update(data).eq("id", existing.data[0]['id']).execute()
+    else:
+        # Insert
+        await sb.table("reading_progress").insert(data).execute()
+    return True
+
+async def get_reading_progress(user_id: int, file_id: int):
+    """Get reading progress for a specific file."""
+    sb = await get_database()
+    result = await sb.table("reading_progress").select("*").eq("user_id", user_id).eq("file_id", file_id).execute()
+    return result.data[0] if result.data else None
+
+async def get_recent_reading(user_id: int):
+    """Get the most recently read book."""
+    sb = await get_database()
+    # Join with files table to get file details
+    result = await sb.table("reading_progress").select("*, files(*)").eq("user_id", user_id).order("updated_at", desc=True).limit(1).execute()
+    if result.data and result.data[0].get('files'):
+        return result.data[0]
+    return None
 
 async def add_file(file_data: dict):
     """

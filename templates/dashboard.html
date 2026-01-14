@@ -329,6 +329,27 @@
             </div>
         </div>
 
+        <!-- Continue Reading -->
+        {% if recent_reading %}
+        <div class="section">
+            <div class="section-header">
+                <h2>📖 Continue Reading</h2>
+            </div>
+            <a href="/read/{{ recent_reading.file_id }}?user_id={{ user_id }}" style="text-decoration: none; color: inherit;">
+                <div class="stat-card" style="display: flex; justify-content: space-between; align-items: center; cursor: pointer; transition: transform 0.2s; background: rgba(0,0,0,0.3); box-shadow: none;">
+                    <div>
+                        <div class="label" style="font-size: 12px; color: #aaa;">Recently Read</div>
+                        <div class="value" style="font-size: 20px; font-weight: 600;">{{ recent_reading.title }}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div class="value" style="color: #667eea; font-size: 24px; font-weight: 700;">{{ recent_reading.percent_fmt }}</div>
+                        <div class="label" style="font-size: 12px;">Completed</div>
+                    </div>
+                </div>
+            </a>
+        </div>
+        {% endif %}
+
         <!-- Quick Actions -->
         <div class="section">
             <div class="section-header">

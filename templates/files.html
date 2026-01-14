@@ -146,6 +146,9 @@
                             <div class="file-meta">{{ file.file_size_fmt }} • {{ file.created_at }}</div>
                         </div>
                         <div class="file-actions">
+                            {% if file.is_epub %}
+                                <a href="/read/{{ file.id }}?user_id={{ user_id }}" class="btn btn-primary" target="_blank">📖 읽기</a>
+                            {% endif %}
                             {% if file.is_large %}
                                 <button class="btn" onclick="requestDownload([{{ file.id }}])">⬇️ 준비 요청</button>
                             {% else %}
