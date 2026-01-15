@@ -639,66 +639,121 @@
 
                 const doc = iframe.contentDocument;
                 const body = doc.body;
-
-                // Get viewport information
                 const win = iframe.contentWindow;
-                const scrollTop = win.pageYOffset || doc.documentElement.scrollTop || body.scrollTop || 0;
-                const viewportHeight = win.innerHeight;
-                const viewportBottom = scrollTop + viewportHeight;
 
-                console.log(`Viewport: scroll=${scrollTop}, height=${viewportHeight}, bottom=${viewportBottom}`);
+                // Get viewport dimensions
+                const viewportHeight = win.innerHeight || doc.documentElement.clientHeight;
 
-                // Find all text-containing elements (p, div, span, etc.)
-                const elements = Array.from(body.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, span'));
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.log('📖 TTS Text Extraction Starting...');
+                console.log(`📐 Viewport Height: ${viewportHeight}px`);
 
+                // Get all block-level elements that typically contain readable text
+                // Prioritize paragraph elements to avoid nested duplication
+                const blockElements = Array.from(body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre'));
+
+                console.log(`📄 Found ${blockElements.length} block elements in page`);
+
+                // If no block elements found, fallback to all text
+                if (blockElements.length === 0) {
+                    console.log('⚠️ No block elements found, using body text');
+                    return (body.innerText || body.textContent || '').trim().substring(0, 1000);
+                }
+
+                // Collect visible and subsequent text
                 let textContent = '';
-                let startCollecting = false;
+                let visibleElementsFound = 0;
+                let firstVisibleIndex = -1;
 
-                for (const element of elements) {
+                blockElements.forEach((element, index) => {
                     const rect = element.getBoundingClientRect();
-                    const elementTop = rect.top + scrollTop;
-                    const elementBottom = elementTop + rect.height;
 
-                    // Check if element is visible or below the current viewport
-                    // Start collecting from the first element that's at least partially visible
-                    if (!startCollecting && elementBottom > scrollTop) {
-                        startCollecting = true;
-                        console.log(`Starting from element at position ${elementTop}px`);
+                    // Element is visible if:
+                    // - Its bottom is below the top of viewport (rect.bottom > 0)
+                    // - Its top is below the bottom of viewport (rect.top < viewportHeight)
+                    const isVisible = rect.bottom > 0 && rect.top < viewportHeight;
+                    const isBelowViewport = rect.top >= viewportHeight;
+
+                    // Debug first few elements
+                    if (index < 5 || isVisible) {
+                        console.log(`Element ${index}: top=${rect.top.toFixed(1)}px, bottom=${rect.bottom.toFixed(1)}px, visible=${isVisible}, text="${element.textContent.substring(0, 30)}..."`);
                     }
 
-                    if (startCollecting) {
+                    // Start collecting from first visible element
+                    if (isVisible && firstVisibleIndex === -1) {
+                        firstVisibleIndex = index;
+                        visibleElementsFound++;
+                        console.log(`✅ First visible element at index ${index}`);
+                    }
+
+                    // Collect text from visible and all subsequent elements
+                    if (firstVisibleIndex !== -1 && index >= firstVisibleIndex) {
                         const text = element.innerText || element.textContent || '';
-                        if (text.trim()) {
-                            textContent += text.trim() + ' ';
+                        const trimmedText = text.trim();
+
+                        if (trimmedText) {
+                            // Add space between paragraphs
+                            if (textContent && !textContent.endsWith(' ')) {
+                                textContent += ' ';
+                            }
+                            textContent += trimmedText;
+
+                            // Stop if we have enough text
+                            if (textContent.length >= 1000) {
+                                console.log(`⏹️ Stopped at element ${index} (reached 1000 chars)`);
+                                return;
+                            }
                         }
                     }
+                });
 
-                    // Stop if we've collected enough text
-                    if (textContent.length > 1000) {
-                        break;
-                    }
+                // If no visible element found (e.g., scrolled to very end), start from beginning
+                if (firstVisibleIndex === -1) {
+                    console.log('⚠️ No visible element found, reading from start');
+                    blockElements.slice(0, 10).forEach(element => {
+                        const text = (element.innerText || element.textContent || '').trim();
+                        if (text) {
+                            if (textContent && !textContent.endsWith(' ')) {
+                                textContent += ' ';
+                            }
+                            textContent += text;
+                            if (textContent.length >= 1000) return;
+                        }
+                    });
                 }
 
                 textContent = textContent.trim();
 
-                // Limit text length (max 1000 chars for better experience)
+                // Limit to 1000 chars and find sentence boundary
                 if (textContent.length > 1000) {
-                    console.log(`Text truncated from ${textContent.length} to 1000 chars`);
+                    console.log(`✂️ Truncating from ${textContent.length} to 1000 chars`);
                     textContent = textContent.substring(0, 1000);
+
                     // Find last sentence ending
-                    const lastPeriod = textContent.lastIndexOf('.');
-                    const lastQuestion = textContent.lastIndexOf('?');
-                    const lastExclamation = textContent.lastIndexOf('!');
-                    const lastSentence = Math.max(lastPeriod, lastQuestion, lastExclamation);
-                    if (lastSentence > 0) {
+                    const endings = [
+                        textContent.lastIndexOf('.'),
+                        textContent.lastIndexOf('。'),
+                        textContent.lastIndexOf('?'),
+                        textContent.lastIndexOf('？'),
+                        textContent.lastIndexOf('!'),
+                        textContent.lastIndexOf('！')
+                    ];
+                    const lastSentence = Math.max(...endings);
+
+                    if (lastSentence > 500) { // Only cut at sentence if we have enough text
                         textContent = textContent.substring(0, lastSentence + 1);
+                        console.log(`✂️ Cut at sentence boundary: ${textContent.length} chars`);
                     }
                 }
 
-                console.log(`Extracted ${textContent.length} chars from visible position`);
+                console.log(`✅ Extracted ${textContent.length} chars`);
+                console.log(`📝 First 100 chars: "${textContent.substring(0, 100)}..."`);
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+
                 return textContent;
+
             } catch (error) {
-                console.error('Error extracting page text:', error);
+                console.error('❌ Error extracting page text:', error);
                 return '';
             }
         }
