@@ -726,8 +726,9 @@
             ttsPlaying = false;
         }
 
-        // Extract text from current EPUB page
-        // EPUB.js renders one page at a time, so we read the entire current page
+        // Extract text from VISIBLE part of current EPUB page
+        // EPUB.js paginated mode loads entire chapter, uses CSS columns/transform to show current "page"
+        // We need to detect which elements are actually visible in the viewport
         function extractPageText() {
             if (!window.rendition) return '';
 
@@ -739,28 +740,65 @@
                 }
 
                 const doc = iframe.contentDocument;
+                const win = iframe.contentWindow;
                 const body = doc.body;
 
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                console.log('📖 TTS: Extracting current EPUB page text');
+                console.log('📖 TTS: Extracting VISIBLE page text (viewport-based)');
 
-                // Get all block-level text elements (avoid nested duplication)
-                const blockElements = Array.from(body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre'));
+                // Get viewport dimensions (visible area of iframe)
+                const viewportWidth = win.innerWidth;
+                const viewportHeight = win.innerHeight;
+                console.log(`📐 Viewport: ${viewportWidth}x${viewportHeight}px`);
 
-                console.log(`📄 Found ${blockElements.length} block elements`);
+                // Get scroll position (for column-based pagination)
+                const scrollX = win.scrollX || win.pageXOffset || body.scrollLeft || 0;
+                const scrollY = win.scrollY || win.pageYOffset || body.scrollTop || 0;
+                console.log(`📜 Scroll: (${scrollX}, ${scrollY})`);
 
-                // If no block elements, use body text as fallback
-                if (blockElements.length === 0) {
-                    const bodyText = (body.innerText || body.textContent || '').trim();
-                    console.log(`⚠️ No block elements, using body text: ${bodyText.length} chars`);
-                    return bodyText.substring(0, 1000);
+                // Get all text elements
+                const allElements = Array.from(body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre'));
+                console.log(`📄 Total elements in chapter: ${allElements.length}`);
+
+                // Filter to only VISIBLE elements
+                const visibleElements = [];
+
+                for (const elem of allElements) {
+                    const rect = elem.getBoundingClientRect();
+
+                    // Element is visible if:
+                    // 1. It's within horizontal viewport: left edge in [0, viewportWidth]
+                    // 2. It's within vertical viewport: top edge in [0, viewportHeight]
+                    // 3. It has non-zero dimensions
+                    const isInViewport = (
+                        rect.right > 0 &&
+                        rect.left < viewportWidth &&
+                        rect.bottom > 0 &&
+                        rect.top < viewportHeight &&
+                        rect.width > 0 &&
+                        rect.height > 0
+                    );
+
+                    if (isInViewport) {
+                        visibleElements.push(elem);
+                        console.log(`✅ Visible: <${elem.tagName}> at (${rect.left.toFixed(0)}, ${rect.top.toFixed(0)}) size ${rect.width.toFixed(0)}x${rect.height.toFixed(0)}`);
+                    }
                 }
 
-                // Collect all text from block elements
+                console.log(`👁️ Visible elements: ${visibleElements.length}/${allElements.length}`);
+
+                // Fallback: if no elements detected as visible, something's wrong with detection
+                // Use first N elements as fallback
+                if (visibleElements.length === 0) {
+                    console.warn('⚠️ No visible elements detected! Using first 10 elements as fallback');
+                    visibleElements.push(...allElements.slice(0, 10));
+                }
+
+                // Extract text from visible elements only
                 let textContent = '';
                 let elementCount = 0;
 
-                for (const element of blockElements) {
+                for (const element of visibleElements) {
                     const text = (element.innerText || element.textContent || '').trim();
 
                     if (text) {
@@ -771,7 +809,7 @@
                         textContent += text;
                         elementCount++;
 
-                        // Stop at 1000 chars to avoid too long audio
+                        // Limit to 1000 chars to avoid too long audio
                         if (textContent.length >= 1000) {
                             console.log(`⏹️ Stopped at element ${elementCount} (reached 1000 chars)`);
                             break;
@@ -802,7 +840,7 @@
                     }
                 }
 
-                console.log(`✅ Extracted ${textContent.length} chars from ${elementCount} elements`);
+                console.log(`✅ Extracted ${textContent.length} chars from ${elementCount} visible elements`);
                 console.log(`📝 Preview: "${textContent.substring(0, 100)}..."`);
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
