@@ -726,9 +726,9 @@
             ttsPlaying = false;
         }
 
-        // Extract text from current EPUB page using CFI Range
+        // Extract text from current EPUB page using CFI Range (async)
         // Use EPUB.js currentLocation() to get CFI range, then extract text from that range
-        function extractPageText() {
+        async function extractPageText() {
             if (!window.rendition || !window.book) return '';
 
             try {
@@ -752,20 +752,22 @@
                     percentage: (location.start.percentage * 100).toFixed(1) + '%'
                 });
 
-                // Try to get Range from CFI using EPUB.js API
+                // Try to get Range from CFI using EPUB.js API (async)
                 try {
-                    // Get the range for current page
-                    const startRange = window.book.getRange(startCFI);
+                    // Get the range for current page (await because it returns Promise)
+                    const startRange = await window.book.getRange(startCFI);
 
                     if (!startRange) {
                         console.warn('⚠️ Could not get Range from startCFI');
                         return extractTextFallback();
                     }
 
+                    console.log('✅ Got Range from startCFI');
+
                     // If we have endCFI, try to extend range to end
                     if (endCFI) {
                         try {
-                            const endRange = window.book.getRange(endCFI);
+                            const endRange = await window.book.getRange(endCFI);
                             if (endRange) {
                                 startRange.setEnd(endRange.endContainer, endRange.endOffset);
                                 console.log('✅ Extended range to endCFI');
@@ -868,7 +870,7 @@
 
         // Play TTS for current page using Edge TTS
         async function playCurrentPage() {
-            const pageText = extractPageText();
+            const pageText = await extractPageText();
 
             if (!pageText) {
                 updateTTSStatus('페이지에 텍스트가 없습니다');
