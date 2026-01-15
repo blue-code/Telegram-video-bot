@@ -738,12 +738,12 @@
         }
 
         // Extract text from next page until sentence ends
-        // Simple approach: get all text from iframe body and find continuation
-        async function getNextPageSentenceCompletion() {
+        // Use searchAnchor (last 50 chars of current page) to find position in iframe
+        async function getNextPageSentenceCompletion(searchAnchor) {
             if (!window.rendition || !window.book) return '';
 
             try {
-                console.log('🔗 Getting text to complete sentence...');
+                console.log(`🔗 Getting text to complete sentence (anchor: "${searchAnchor.substring(0, 30)}...")`);
 
                 // Get iframe body text
                 const iframe = document.querySelector('iframe');
@@ -757,8 +757,23 @@
 
                 console.log(`📄 Total iframe text: ${allText.length} chars`);
 
-                // Find the next sentence ending (up to 300 chars)
-                const searchText = allText.substring(0, 300);
+                // Find where the current page ends in the iframe body
+                const anchorIndex = allText.indexOf(searchAnchor);
+
+                if (anchorIndex === -1) {
+                    console.warn(`⚠️ Could not find anchor text in iframe`);
+                    return '';
+                }
+
+                console.log(`📍 Found anchor at position ${anchorIndex}`);
+
+                // Get text after the anchor
+                const afterAnchor = allText.substring(anchorIndex + searchAnchor.length);
+
+                console.log(`📝 Text after anchor: ${afterAnchor.length} chars`);
+
+                // Find the next sentence ending (up to 300 chars after anchor)
+                const searchText = afterAnchor.substring(0, 300);
                 const sentenceEndIndex = findNextSentenceEnd(searchText);
 
                 if (sentenceEndIndex !== -1) {
@@ -766,8 +781,9 @@
                     console.log(`✅ Found sentence completion: "${completionText.substring(0, 100)}..."`);
                     return ' ' + completionText; // Add space before
                 } else {
-                    console.log(`⚠️ No sentence end found in first 300 chars`);
-                    return '';
+                    console.log(`⚠️ No sentence end found in 300 chars after anchor`);
+                    // Return partial text anyway (up to 100 chars)
+                    return ' ' + searchText.substring(0, 100);
                 }
 
             } catch (error) {
@@ -881,8 +897,11 @@
                     if (!endsWithSentence(rangeText)) {
                         console.log('⚠️ Text does not end with sentence. Looking for completion...');
 
+                        // Get the last 50 chars of current page to find position in iframe
+                        const searchAnchor = rangeText.substring(Math.max(0, rangeText.length - 50)).trim();
+
                         // Get next page text to complete sentence
-                        const nextPageText = await getNextPageSentenceCompletion();
+                        const nextPageText = await getNextPageSentenceCompletion(searchAnchor);
                         if (nextPageText) {
                             rangeText += nextPageText;
                             console.log(`✅ Completed sentence. Total: ${rangeText.length} chars`);
