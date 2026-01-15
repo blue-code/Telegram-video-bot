@@ -902,9 +902,10 @@
                             rangeText += nextPageText;
                             console.log(`✅ Completed sentence. Total: ${rangeText.length} chars`);
 
-                            // Save ORIGINAL page text (before overlap skip) to detect overlap on next page
-                            ttsAlreadyReadText = originalPageText;
-                            console.log(`💾 Saved original page text (${ttsAlreadyReadText.length} chars) for overlap detection`);
+                            // Save FULL TEXT (after sentence completion) to detect overlap on next page
+                            // NOT originalPageText - we need the text AFTER completion!
+                            ttsAlreadyReadText = rangeText;
+                            console.log(`💾 Saved completed text (${ttsAlreadyReadText.length} chars) for overlap detection`);
                         }
                     } else {
                         console.log('✅ Text ends with complete sentence');
