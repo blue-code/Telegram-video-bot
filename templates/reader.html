@@ -726,6 +726,88 @@
             ttsPlaying = false;
         }
 
+        // Check if text ends with sentence ending punctuation
+        function endsWithSentence(text) {
+            const endings = ['.', '。', '!', '！', '?', '？', '"', '"', '\'', '」', '』', ')', '）'];
+            const trimmed = text.trim();
+            return endings.some(ending => trimmed.endsWith(ending));
+        }
+
+        // Extract text from next page until sentence ends
+        async function getNextPageSentenceCompletion() {
+            if (!window.rendition || !window.book) return '';
+
+            try {
+                // Get next page location
+                const currentLoc = window.rendition.currentLocation();
+                if (!currentLoc || !currentLoc.end) return '';
+
+                // Get a bit more text from after endCFI to complete the sentence
+                const endCFI = currentLoc.end.cfi;
+
+                console.log('🔗 Getting next page text to complete sentence...');
+
+                // Get range starting from current page end
+                const nextRange = await window.book.getRange(endCFI);
+                if (!nextRange) return '';
+
+                // Get text from iframe starting at endCFI position
+                const iframe = document.querySelector('iframe');
+                if (!iframe || !iframe.contentDocument) return '';
+
+                const doc = iframe.contentDocument;
+
+                // Create range from endCFI to find next sentence ending
+                let nextText = '';
+                const walker = doc.createTreeWalker(
+                    nextRange.endContainer.nodeType === 3 ? nextRange.endContainer.parentNode : nextRange.endContainer,
+                    NodeFilter.SHOW_TEXT,
+                    null
+                );
+
+                let node;
+                let charCount = 0;
+                const maxChars = 200; // Max chars to look ahead
+
+                while ((node = walker.nextNode()) && charCount < maxChars) {
+                    const text = node.textContent || '';
+                    nextText += text;
+                    charCount += text.length;
+
+                    // Check if we found a sentence ending
+                    const sentenceEndIndex = findNextSentenceEnd(nextText);
+                    if (sentenceEndIndex !== -1) {
+                        nextText = nextText.substring(0, sentenceEndIndex + 1);
+                        console.log(`✅ Found sentence end in next page: "${nextText}"`);
+                        return nextText;
+                    }
+                }
+
+                // If no sentence end found, return what we have (up to maxChars)
+                console.log(`⚠️ No sentence end found, returning partial: "${nextText.substring(0, 100)}..."`);
+                return nextText;
+
+            } catch (error) {
+                console.warn('⚠️ Could not get next page text:', error.message);
+                return '';
+            }
+        }
+
+        // Find next sentence ending in text
+        function findNextSentenceEnd(text) {
+            const endings = ['.', '。', '!', '！', '?', '？'];
+            let minIndex = -1;
+
+            for (const ending of endings) {
+                const index = text.indexOf(ending);
+                if (index !== -1 && (minIndex === -1 || index < minIndex)) {
+                    minIndex = index;
+                }
+            }
+
+            return minIndex;
+        }
+
         // Extract text from current EPUB page using CFI Range (async)
         // Use EPUB.js currentLocation() to get CFI range, then extract text from that range
         async function extractPageText() {
@@ -783,9 +865,23 @@
                     console.log(`✅ Extracted ${rangeText.length} chars from CFI Range`);
                     console.log(`📝 Preview: "${rangeText.substring(0, 100)}..."`);
 
-                    // Limit to 1000 chars
-                    if (rangeText.length > 1000) {
-                        rangeText = rangeText.substring(0, 1000);
+                    // Check if text ends with complete sentence
+                    if (!endsWithSentence(rangeText)) {
+                        console.log('⚠️ Text does not end with sentence. Looking for completion...');
+
+                        // Get next page text to complete sentence
+                        const nextPageText = await getNextPageSentenceCompletion();
+                        if (nextPageText) {
+                            rangeText += nextPageText;
+                            console.log(`✅ Completed sentence. Total: ${rangeText.length} chars`);
+                        }
+                    } else {
+                        console.log('✅ Text ends with complete sentence');
+                    }
+
+                    // Limit to 1200 chars (increased from 1000 to allow sentence completion)
+                    if (rangeText.length > 1200) {
+                        rangeText = rangeText.substring(0, 1200);
 
                         // Truncate at sentence boundary
                         const endings = [
@@ -870,6 +966,10 @@
 
         // Play TTS for current page using Edge TTS
         async function playCurrentPage() {
+            // Wait a bit to ensure rendition layout is stable after fontSize changes
+            // This ensures currentLocation() returns accurate page boundaries
+            await new Promise(resolve => setTimeout(resolve, 100));
+
             const pageText = await extractPageText();
 
             if (!pageText) {
