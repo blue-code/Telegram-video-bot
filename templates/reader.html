@@ -726,14 +726,14 @@
             ttsPlaying = false;
         }
 
-        // Extract text from current EPUB page using EPUB.js Location API
-        // EPUB.js paginated mode uses CSS columns, so we need to use currentLocation() API
+        // Extract text from current EPUB page using CFI Range
+        // Use EPUB.js currentLocation() to get CFI range, then extract text from that range
         function extractPageText() {
-            if (!window.rendition) return '';
+            if (!window.rendition || !window.book) return '';
 
             try {
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                console.log('📖 TTS: Extracting current page text (Location API)');
+                console.log('📖 TTS: Extracting current page text (CFI Range)');
 
                 // Get current location from EPUB.js
                 const location = window.rendition.currentLocation();
@@ -743,13 +743,85 @@
                     return '';
                 }
 
-                console.log('📍 Current location:', {
-                    startCFI: location.start.cfi,
-                    endCFI: location.end?.cfi,
+                const startCFI = location.start.cfi;
+                const endCFI = location.end?.cfi;
+
+                console.log('📍 Current page CFI:', {
+                    start: startCFI,
+                    end: endCFI,
                     percentage: (location.start.percentage * 100).toFixed(1) + '%'
                 });
 
-                // Get iframe and document
+                // Try to get Range from CFI using EPUB.js API
+                try {
+                    // Get the range for current page
+                    const startRange = window.book.getRange(startCFI);
+
+                    if (!startRange) {
+                        console.warn('⚠️ Could not get Range from startCFI');
+                        return extractTextFallback();
+                    }
+
+                    // If we have endCFI, try to extend range to end
+                    if (endCFI) {
+                        try {
+                            const endRange = window.book.getRange(endCFI);
+                            if (endRange) {
+                                startRange.setEnd(endRange.endContainer, endRange.endOffset);
+                                console.log('✅ Extended range to endCFI');
+                            }
+                        } catch (e) {
+                            console.warn('⚠️ Could not extend to endCFI:', e.message);
+                        }
+                    }
+
+                    // Extract text from the Range
+                    let rangeText = startRange.toString().trim();
+
+                    console.log(`✅ Extracted ${rangeText.length} chars from CFI Range`);
+                    console.log(`📝 Preview: "${rangeText.substring(0, 100)}..."`);
+
+                    // Limit to 1000 chars
+                    if (rangeText.length > 1000) {
+                        rangeText = rangeText.substring(0, 1000);
+
+                        // Truncate at sentence boundary
+                        const endings = [
+                            rangeText.lastIndexOf('.'),
+                            rangeText.lastIndexOf('。'),
+                            rangeText.lastIndexOf('?'),
+                            rangeText.lastIndexOf('？'),
+                            rangeText.lastIndexOf('!'),
+                            rangeText.lastIndexOf('！')
+                        ];
+                        const lastSentence = Math.max(...endings);
+
+                        if (lastSentence > 500) {
+                            rangeText = rangeText.substring(0, lastSentence + 1);
+                            console.log(`✂️ Cut at sentence: ${rangeText.length} chars`);
+                        }
+                    }
+
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    return rangeText;
+
+                } catch (rangeError) {
+                    console.error('❌ Error getting Range from CFI:', rangeError);
+                    console.log('🔄 Falling back to visible elements method');
+                    return extractTextFallback();
+                }
+
+            } catch (error) {
+                console.error('❌ Error extracting page text:', error);
+                return '';
+            }
+        }
+
+        // Fallback method: extract text from iframe directly
+        function extractTextFallback() {
+            try {
+                console.log('📄 Using fallback method (iframe scan)');
+
                 const iframe = document.querySelector('iframe');
                 if (!iframe || !iframe.contentDocument) {
                     console.warn('❌ Cannot access iframe content');
@@ -757,87 +829,25 @@
                 }
 
                 const doc = iframe.contentDocument;
-                const win = iframe.contentWindow;
                 const body = doc.body;
-
-                // Get viewport width (single page width)
-                const viewportWidth = win.innerWidth;
-                console.log(`📐 Single page width: ${viewportWidth}px`);
-
-                // Calculate current page's X coordinate range
-                // EPUB.js uses CSS columns with transform, we need to find which column is visible
-
-                // Check for transform on body or wrapper
-                let translateX = 0;
-                const bodyStyle = win.getComputedStyle(body);
-                const transform = bodyStyle.transform || bodyStyle.webkitTransform;
-
-                if (transform && transform !== 'none') {
-                    const matrix = transform.match(/matrix\(([^)]+)\)/);
-                    if (matrix) {
-                        const values = matrix[1].split(',').map(v => parseFloat(v.trim()));
-                        translateX = values[4] || 0; // translateX is 5th value in matrix
-                        console.log(`🔄 Body transform translateX: ${translateX}px`);
-                    }
-                }
-
-                // Calculate visible X range based on transform
-                // If translateX is negative, content is shifted left (showing later pages)
-                const visibleStartX = Math.abs(translateX);
-                const visibleEndX = visibleStartX + viewportWidth;
-
-                console.log(`👁️ Visible X range: ${visibleStartX.toFixed(0)} - ${visibleEndX.toFixed(0)}px`);
 
                 // Get all text elements
                 const allElements = Array.from(body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre'));
-                console.log(`📄 Total elements: ${allElements.length}`);
 
-                // Filter elements that are within the visible X range
-                const visibleElements = [];
-
-                for (const elem of allElements) {
-                    const rect = elem.getBoundingClientRect();
-
-                    // Calculate absolute position (accounting for transform)
-                    const absoluteX = rect.left - translateX;
-
-                    // Element is visible if its left edge is within current page
-                    const isVisible = (
-                        absoluteX >= visibleStartX &&
-                        absoluteX < visibleEndX &&
-                        rect.width > 0 &&
-                        rect.height > 0
-                    );
-
-                    if (isVisible) {
-                        visibleElements.push(elem);
-                    }
-                }
-
-                console.log(`👁️ Visible elements: ${visibleElements.length}/${allElements.length}`);
-
-                // Fallback: if no elements detected, try first N elements
-                if (visibleElements.length === 0) {
-                    console.warn('⚠️ No visible elements detected! Using fallback');
-                    visibleElements.push(...allElements.slice(0, 10));
-                }
-
-                // Extract text from visible elements
+                // Just take first few elements (this is a fallback)
                 let textContent = '';
                 let elementCount = 0;
 
-                for (const element of visibleElements) {
+                for (const element of allElements) {
                     const text = (element.innerText || element.textContent || '').trim();
 
                     if (text) {
-                        // Add space between blocks
                         if (textContent && !textContent.endsWith(' ')) {
                             textContent += ' ';
                         }
                         textContent += text;
                         elementCount++;
 
-                        // Limit to 1000 chars
                         if (textContent.length >= 1000) {
                             console.log(`⏹️ Stopped at element ${elementCount} (reached 1000 chars)`);
                             break;
@@ -847,34 +857,11 @@
 
                 textContent = textContent.trim();
 
-                // Truncate at sentence boundary if needed
-                if (textContent.length > 1000) {
-                    textContent = textContent.substring(0, 1000);
-
-                    const endings = [
-                        textContent.lastIndexOf('.'),
-                        textContent.lastIndexOf('。'),
-                        textContent.lastIndexOf('?'),
-                        textContent.lastIndexOf('？'),
-                        textContent.lastIndexOf('!'),
-                        textContent.lastIndexOf('！')
-                    ];
-                    const lastSentence = Math.max(...endings);
-
-                    if (lastSentence > 500) {
-                        textContent = textContent.substring(0, lastSentence + 1);
-                        console.log(`✂️ Cut at sentence: ${textContent.length} chars`);
-                    }
-                }
-
-                console.log(`✅ Extracted ${textContent.length} chars from ${elementCount} visible elements`);
-                console.log(`📝 Preview: "${textContent.substring(0, 100)}..."`);
-                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-
-                return textContent;
+                console.log(`✅ Fallback extracted ${textContent.length} chars from ${elementCount} elements`);
+                return textContent.substring(0, 1000);
 
             } catch (error) {
-                console.error('❌ Error extracting page text:', error);
+                console.error('❌ Fallback extraction failed:', error);
                 return '';
             }
         }
