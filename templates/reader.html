@@ -590,7 +590,7 @@
         let ttsWordBoundaries = [];
         let currentHighlightedElement = null;
         let highlightTimeouts = [];
-        let ttsNextPageStartCFI = null; // CFI to start from on next page (when sentence completed across page boundary)
+        let ttsAlreadyReadText = null; // Text already read from next page (to skip on auto-advance)
 
         // Microsoft Edge Korean voices (fallback)
         window.edgeKoreanVoices = [
@@ -724,8 +724,8 @@
                 currentHighlightedElement = null;
             }
 
-            // Clear saved next page start CFI (user stopped, reset)
-            ttsNextPageStartCFI = null;
+            // Clear saved already-read text (user stopped, reset)
+            ttsAlreadyReadText = null;
 
             ttsPlaying = false;
         }
@@ -763,8 +763,6 @@
 
                 // Create range from endCFI to find next sentence ending
                 let nextText = '';
-                let sentenceEndNode = null;
-                let sentenceEndOffset = 0;
 
                 const walker = doc.createTreeWalker(
                     nextRange.endContainer.nodeType === 3 ? nextRange.endContainer.parentNode : nextRange.endContainer,
@@ -784,27 +782,12 @@
                     // Check if we found a sentence ending
                     const sentenceEndIndex = findNextSentenceEnd(nextText);
                     if (sentenceEndIndex !== -1) {
-                        // Calculate the end position in the current node
-                        const lengthBeforeCurrentNode = nextText.length - text.length;
-                        const offsetInCurrentNode = sentenceEndIndex - lengthBeforeCurrentNode;
-
                         nextText = nextText.substring(0, sentenceEndIndex + 1);
                         console.log(`✅ Found sentence end in next page: "${nextText}"`);
 
-                        // Store the CFI for the next page start (after the sentence end)
-                        try {
-                            // Create a range after the sentence ending
-                            const afterSentenceRange = doc.createRange();
-                            afterSentenceRange.setStart(node, Math.min(offsetInCurrentNode + 1, node.length));
-                            afterSentenceRange.setEnd(node, Math.min(offsetInCurrentNode + 1, node.length));
-
-                            // Generate CFI for this position
-                            const section = window.rendition.location.start.href;
-                            ttsNextPageStartCFI = window.book.cfiFromRange(afterSentenceRange, section);
-                            console.log(`💾 Saved next page start CFI: ${ttsNextPageStartCFI}`);
-                        } catch (cfiError) {
-                            console.warn('⚠️ Could not generate CFI for next page start:', cfiError.message);
-                        }
+                        // Save this text to skip on next page
+                        ttsAlreadyReadText = nextText.trim();
+                        console.log(`💾 Saved already-read text (${ttsAlreadyReadText.length} chars) to skip on next page`);
 
                         return nextText;
                     }
@@ -812,6 +795,13 @@
 
                 // If no sentence end found, return what we have (up to maxChars)
                 console.log(`⚠️ No sentence end found, returning partial: "${nextText.substring(0, 100)}..."`);
+
+                // Save partial text as well
+                if (nextText.trim()) {
+                    ttsAlreadyReadText = nextText.trim();
+                    console.log(`💾 Saved partial already-read text (${ttsAlreadyReadText.length} chars)`);
+                }
+
                 return nextText;
 
             } catch (error) {
@@ -852,14 +842,7 @@
                     return '';
                 }
 
-                // If we have a saved start CFI from previous page's sentence completion, use it
-                let startCFI = location.start.cfi;
-                if (ttsNextPageStartCFI) {
-                    console.log(`📌 Using saved start CFI: ${ttsNextPageStartCFI}`);
-                    startCFI = ttsNextPageStartCFI;
-                    ttsNextPageStartCFI = null; // Clear it after use
-                }
-
+                const startCFI = location.start.cfi;
                 const endCFI = location.end?.cfi;
 
                 console.log('📍 Current page CFI:', {
@@ -898,6 +881,33 @@
 
                     console.log(`✅ Extracted ${rangeText.length} chars from CFI Range`);
                     console.log(`📝 Preview: "${rangeText.substring(0, 100)}..."`);
+
+                    // Check if we need to skip already-read text from previous page
+                    if (ttsAlreadyReadText) {
+                        console.log(`📌 Checking for already-read text (${ttsAlreadyReadText.length} chars)`);
+
+                        // Check if current page starts with the already-read text
+                        if (rangeText.startsWith(ttsAlreadyReadText)) {
+                            console.log(`✂️ Skipping already-read text: "${ttsAlreadyReadText.substring(0, 50)}..."`);
+                            rangeText = rangeText.substring(ttsAlreadyReadText.length).trim();
+                            console.log(`✅ After skipping: ${rangeText.length} chars remaining`);
+                        } else {
+                            // Try fuzzy match (first 50 chars)
+                            const alreadyReadStart = ttsAlreadyReadText.substring(0, 50);
+                            const rangeTextStart = rangeText.substring(0, 50);
+
+                            if (rangeTextStart.includes(alreadyReadStart) || alreadyReadStart.includes(rangeTextStart)) {
+                                console.log(`✂️ Fuzzy match - skipping: "${ttsAlreadyReadText.substring(0, 50)}..."`);
+                                rangeText = rangeText.substring(ttsAlreadyReadText.length).trim();
+                                console.log(`✅ After fuzzy skip: ${rangeText.length} chars remaining`);
+                            } else {
+                                console.log(`⚠️ Already-read text not found at start of page. Not skipping.`);
+                            }
+                        }
+
+                        // Clear after use
+                        ttsAlreadyReadText = null;
+                    }
 
                     // Check if text ends with complete sentence
                     if (!endsWithSentence(rangeText)) {
