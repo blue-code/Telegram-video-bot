@@ -8,6 +8,66 @@
     <meta name="theme-color" content="#1a1a1a">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    <!-- Edge TTS Backend Client -->
+    <script>
+        // EdgeTTS Backend Client (calls FastAPI endpoint)
+        class EdgeTTS {
+            constructor(text, voice, options = {}) {
+                this.text = text;
+                this.voice = voice;
+                this.rate = options.rate || '+0%';
+                this.volume = options.volume || '+0%';
+                this.pitch = options.pitch || '+0Hz';
+                this.apiUrl = '/api/tts/synthesize';
+            }
+
+            async synthesize() {
+                try {
+                    console.log('Calling backend TTS API...');
+
+                    const response = await fetch(this.apiUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            text: this.text,
+                            voice: this.voice,
+                            rate: this.rate,
+                            pitch: this.pitch,
+                            volume: this.volume
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const error = await response.json();
+                        throw new Error(error.detail || 'TTS API error');
+                    }
+
+                    const result = await response.json();
+
+                    // Decode base64 audio
+                    const audioBytes = Uint8Array.from(atob(result.audio), c => c.charCodeAt(0));
+                    const audioBlob = new Blob([audioBytes], { type: 'audio/mpeg' });
+
+                    console.log(`Backend TTS: ${result.size} bytes, ${result.subtitle.length} words`);
+
+                    return {
+                        audio: audioBlob,
+                        subtitle: result.subtitle
+                    };
+
+                } catch (error) {
+                    console.error('Backend TTS error:', error);
+                    throw error;
+                }
+            }
+        }
+
+        // Expose globally
+        window.EdgeTTS = EdgeTTS;
+        console.log('✅ EdgeTTS backend client loaded');
+    </script>
     <style>
         body {
             margin: 0;
@@ -142,6 +202,50 @@
             font-size: 12px; color: #888;
             pointer-events: none; z-index: 5;
         }
+
+        /* TTS Highlight Styles */
+        .tts-highlight {
+            background-color: rgba(102, 126, 234, 0.3) !important;
+            transition: background-color 0.3s ease;
+        }
+
+        #tts-toggle.active {
+            background: #667eea;
+            color: #fff;
+            border-color: #667eea;
+        }
+
+        #tts-play-pause.playing {
+            background: #f59e0b;
+        }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 4px;
+            background: #444;
+            border-radius: 2px;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #667eea;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: #667eea;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
     </style>
 </head>
 <body>
@@ -192,6 +296,42 @@
                 <option value="'Times New Roman', serif">Times New Roman</option>
                 <option value="Arial, sans-serif">Arial</option>
             </select>
+        </div>
+
+        <!-- TTS Controls (Web Speech API) -->
+        <div class="setting-group">
+            <span class="setting-label">Text-to-Speech (음성 읽기)</span>
+            <div style="display: flex; gap: 10px; margin-bottom: 10px;">
+                <button id="tts-play-pause" class="theme-btn" onclick="toggleTTSPlayPause()" style="flex: 1;">
+                    ▶ 읽기 시작
+                </button>
+            </div>
+            <div id="tts-status" style="font-size: 11px; color: #888; margin-bottom: 8px; min-height: 16px;">
+                페이지의 텍스트를 소리내어 읽어줍니다
+            </div>
+            <div id="tts-controls">
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 12px; color: #888; display: block; margin-bottom: 5px;">목소리</label>
+                    <select id="tts-voice" onchange="changeTTSVoice()">
+                        <option value="">로딩 중...</option>
+                    </select>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 12px; color: #888; display: block; margin-bottom: 5px;">
+                        속도: <span id="tts-speed-val">1.0x</span>
+                    </label>
+                    <input type="range" id="tts-speed" min="0.5" max="2.0" step="0.1" value="1.0"
+                           oninput="changeTTSSpeed()" style="width: 100%;">
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <label style="font-size: 12px; color: #888; display: block; margin-bottom: 5px;">음높이</label>
+                    <input type="range" id="tts-pitch" min="0.5" max="2.0" step="0.1" value="1.0"
+                           oninput="changeTTSPitch()" style="width: 100%;">
+                    <div style="font-size: 11px; color: #666; text-align: center;">
+                        <span id="tts-pitch-val">1.0</span>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -354,7 +494,459 @@
                         percent: percent * 100
                     })
                 }).catch(err => console.error('Failed to save progress', err));
-            }, 1000); 
+            }, 1000);
+        }
+
+        // ============= TTS FUNCTIONALITY (Microsoft Edge TTS) =============
+        // TTS State
+        let ttsPlaying = false;
+        let ttsCurrentSpeed = 1.0;
+        let ttsCurrentPitch = 1.0;
+        let ttsCurrentVolume = 1.0;
+        let ttsCurrentVoice = 'ko-KR-SunHiNeural'; // Default to most natural Korean voice
+        let ttsAudioElement = null;
+        let ttsWordBoundaries = [];
+        let currentHighlightedElement = null;
+        let highlightTimeouts = [];
+
+        // Microsoft Edge Korean voices (fallback)
+        window.edgeKoreanVoices = [
+            { name: 'ko-KR-SunHiNeural', label: '선희 (여성, 자연스러움)', gender: 'Female' },
+            { name: 'ko-KR-InJoonNeural', label: '인준 (남성)', gender: 'Male' },
+            { name: 'ko-KR-BongJinNeural', label: '봉진 (남성)', gender: 'Male' },
+            { name: 'ko-KR-GookMinNeural', label: '국민 (남성)', gender: 'Male' },
+            { name: 'ko-KR-JiMinNeural', label: '지민 (여성)', gender: 'Female' },
+            { name: 'ko-KR-SeoHyeonNeural', label: '서현 (여성)', gender: 'Female' },
+            { name: 'ko-KR-SoonBokNeural', label: '순복 (여성)', gender: 'Female' },
+            { name: 'ko-KR-YuJinNeural', label: '유진 (여성)', gender: 'Female' }
+        ];
+
+        // Initialize TTS when page loads
+        window.addEventListener('load', initializeTTS);
+
+        // Update TTS status message
+        function updateTTSStatus(message) {
+            const statusEl = document.getElementById('tts-status');
+            if (statusEl) statusEl.textContent = message;
+        }
+
+        // Initialize Edge TTS
+        function initializeTTS() {
+            console.log('✅ Edge TTS 초기화 시작 (백엔드)');
+
+            // Load Korean voices from backend
+            loadVoicesFromBackend();
+            updateTTSStatus('준비 완료. 읽기 시작 버튼을 눌러주세요');
+            console.log('✅ Edge TTS 초기화 완료');
+        }
+
+        // Load voices from backend API
+        async function loadVoicesFromBackend() {
+            try {
+                const response = await fetch('/api/tts/voices');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.voices && data.voices.length > 0) {
+                        // Update global voices array
+                        window.edgeKoreanVoices = data.voices;
+                        loadVoices();
+                        console.log(`✅ ${data.voices.length}개 음성 로드됨 (백엔드)`);
+                    }
+                }
+            } catch (error) {
+                console.error('음성 목록 로드 실패:', error);
+                // Use fallback voices
+                loadVoices();
+            }
+        }
+
+        // Load available voices
+        function loadVoices() {
+            const voiceSelect = document.getElementById('tts-voice');
+            voiceSelect.innerHTML = '';
+
+            // Add Korean voices
+            window.edgeKoreanVoices.forEach((voice, index) => {
+                const option = document.createElement('option');
+                option.value = voice.name;
+                option.textContent = voice.label;
+                if (index === 0) {
+                    option.selected = true;
+                }
+                voiceSelect.appendChild(option);
+            });
+
+            console.log(`${window.edgeKoreanVoices.length}개 한국어 음성 로드됨`);
+        }
+
+        // Toggle play/pause
+        async function toggleTTSPlayPause() {
+            const playPauseBtn = document.getElementById('tts-play-pause');
+
+            if (!ttsPlaying) {
+                // Start playing
+                playPauseBtn.textContent = '⏸ 일시정지';
+                playPauseBtn.classList.add('playing');
+                ttsPlaying = true;
+                await playCurrentPage();
+            } else {
+                // Pause/Stop
+                stopTTS();
+                playPauseBtn.textContent = '▶ 읽기 시작';
+                playPauseBtn.classList.remove('playing');
+                ttsPlaying = false;
+            }
+        }
+
+        // Stop TTS playback
+        function stopTTS() {
+            console.log('Stopping Edge TTS playback');
+
+            // Stop audio
+            if (ttsAudioElement) {
+                ttsAudioElement.pause();
+                ttsAudioElement.currentTime = 0;
+                ttsAudioElement = null;
+            }
+
+            // Clear all highlight timeouts
+            highlightTimeouts.forEach(timeout => clearTimeout(timeout));
+            highlightTimeouts = [];
+
+            // Remove highlight
+            if (currentHighlightedElement) {
+                try {
+                    currentHighlightedElement.style.backgroundColor = '';
+                } catch (e) {
+                    console.warn('Error removing highlight:', e);
+                }
+                currentHighlightedElement = null;
+            }
+
+            ttsPlaying = false;
+        }
+
+        // Extract text from current EPUB page starting from visible position
+        function extractPageText() {
+            if (!window.rendition) return '';
+
+            try {
+                const iframe = document.querySelector('iframe');
+                if (!iframe || !iframe.contentDocument) {
+                    console.warn('Cannot access iframe content');
+                    return '';
+                }
+
+                const doc = iframe.contentDocument;
+                const body = doc.body;
+
+                // Get viewport information
+                const win = iframe.contentWindow;
+                const scrollTop = win.pageYOffset || doc.documentElement.scrollTop || body.scrollTop || 0;
+                const viewportHeight = win.innerHeight;
+                const viewportBottom = scrollTop + viewportHeight;
+
+                console.log(`Viewport: scroll=${scrollTop}, height=${viewportHeight}, bottom=${viewportBottom}`);
+
+                // Find all text-containing elements (p, div, span, etc.)
+                const elements = Array.from(body.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, span'));
+
+                let textContent = '';
+                let startCollecting = false;
+
+                for (const element of elements) {
+                    const rect = element.getBoundingClientRect();
+                    const elementTop = rect.top + scrollTop;
+                    const elementBottom = elementTop + rect.height;
+
+                    // Check if element is visible or below the current viewport
+                    // Start collecting from the first element that's at least partially visible
+                    if (!startCollecting && elementBottom > scrollTop) {
+                        startCollecting = true;
+                        console.log(`Starting from element at position ${elementTop}px`);
+                    }
+
+                    if (startCollecting) {
+                        const text = element.innerText || element.textContent || '';
+                        if (text.trim()) {
+                            textContent += text.trim() + ' ';
+                        }
+                    }
+
+                    // Stop if we've collected enough text
+                    if (textContent.length > 1000) {
+                        break;
+                    }
+                }
+
+                textContent = textContent.trim();
+
+                // Limit text length (max 1000 chars for better experience)
+                if (textContent.length > 1000) {
+                    console.log(`Text truncated from ${textContent.length} to 1000 chars`);
+                    textContent = textContent.substring(0, 1000);
+                    // Find last sentence ending
+                    const lastPeriod = textContent.lastIndexOf('.');
+                    const lastQuestion = textContent.lastIndexOf('?');
+                    const lastExclamation = textContent.lastIndexOf('!');
+                    const lastSentence = Math.max(lastPeriod, lastQuestion, lastExclamation);
+                    if (lastSentence > 0) {
+                        textContent = textContent.substring(0, lastSentence + 1);
+                    }
+                }
+
+                console.log(`Extracted ${textContent.length} chars from visible position`);
+                return textContent;
+            } catch (error) {
+                console.error('Error extracting page text:', error);
+                return '';
+            }
+        }
+
+        // Play TTS for current page using Edge TTS
+        async function playCurrentPage() {
+            const pageText = extractPageText();
+
+            if (!pageText) {
+                updateTTSStatus('페이지에 텍스트가 없습니다');
+                ttsPlaying = false;
+                document.getElementById('tts-play-pause').textContent = '▶ 읽기 시작';
+                document.getElementById('tts-play-pause').classList.remove('playing');
+                return;
+            }
+
+            console.log(`Reading text (${pageText.length} chars):`, pageText.substring(0, 100) + '...');
+            updateTTSStatus('음성 생성 중...');
+
+            try {
+                // Calculate rate and pitch adjustments
+                const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
+                const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
+
+                // Edge TTS pitch uses Hz, convert from 0.5-2.0 to Hz
+                const pitchHz = Math.round((ttsCurrentPitch - 1.0) * 10);
+                const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
+
+                const volumePercent = Math.round((ttsCurrentVolume - 1.0) * 100);
+                const volumeStr = (volumePercent >= 0 ? '+' : '') + volumePercent + '%';
+
+                console.log('Edge TTS Settings:', {
+                    voice: ttsCurrentVoice,
+                    rate: rateStr,
+                    pitch: pitchStr,
+                    volume: volumeStr
+                });
+
+                // Create TTS instance
+                if (typeof window.EdgeTTS !== 'function') {
+                    throw new Error('EdgeTTS class not available');
+                }
+
+                const tts = new window.EdgeTTS(pageText, ttsCurrentVoice, {
+                    rate: rateStr,
+                    pitch: pitchStr,
+                    volume: volumeStr
+                });
+
+                // Synthesize speech
+                const result = await tts.synthesize();
+
+                if (!ttsPlaying) {
+                    console.log('TTS stopped before synthesis completed');
+                    return;
+                }
+
+                console.log(`✅ Edge TTS synthesis complete: ${result.audio.size} bytes, ${result.subtitle.length} word boundaries`);
+
+                // Store word boundaries for highlighting
+                ttsWordBoundaries = result.subtitle;
+
+                // Create audio element
+                const audioUrl = URL.createObjectURL(result.audio);
+                ttsAudioElement = new Audio(audioUrl);
+                ttsAudioElement.volume = ttsCurrentVolume;
+
+                // Audio event handlers
+                ttsAudioElement.onplay = () => {
+                    console.log('✅ Edge TTS playback started');
+                    updateTTSStatus(`읽는 중... (${pageText.length}자)`);
+
+                    // Start highlighting with word boundaries
+                    if (ttsWordBoundaries.length > 0) {
+                        highlightTextWithWordBoundaries();
+                    }
+                };
+
+                ttsAudioElement.onended = () => {
+                    console.log('Edge TTS playback ended');
+
+                    // Clean up
+                    URL.revokeObjectURL(audioUrl);
+
+                    if (ttsPlaying) {
+                        // Auto-advance to next page
+                        updateTTSStatus('다음 페이지로 이동 중...');
+                        setTimeout(() => {
+                            if (window.rendition) {
+                                window.rendition.next();
+                                // Play next page after delay
+                                setTimeout(() => {
+                                    if (ttsPlaying) playCurrentPage();
+                                }, 1000);
+                            }
+                        }, 500);
+                    } else {
+                        updateTTSStatus('읽기 완료');
+                    }
+                };
+
+                ttsAudioElement.onerror = (event) => {
+                    console.error('Edge TTS audio error:', event);
+                    updateTTSStatus('오류: 오디오 재생 실패');
+                    ttsPlaying = false;
+                    const playPauseBtn = document.getElementById('tts-play-pause');
+                    playPauseBtn.textContent = '▶ 읽기 시작';
+                    playPauseBtn.classList.remove('playing');
+                    URL.revokeObjectURL(audioUrl);
+                };
+
+                // Start playback
+                await ttsAudioElement.play();
+
+            } catch (error) {
+                console.error('Edge TTS error:', error);
+
+                // Check for CORS error
+                if (error.message && error.message.includes('CORS')) {
+                    updateTTSStatus('⚠️ 네트워크 오류 (CORS). 백엔드 프록시가 필요할 수 있습니다.');
+                } else {
+                    updateTTSStatus('오류: ' + error.message);
+                }
+
+                ttsPlaying = false;
+                const playPauseBtn = document.getElementById('tts-play-pause');
+                playPauseBtn.textContent = '▶ 읽기 시작';
+                playPauseBtn.classList.remove('playing');
+            }
+        }
+
+        // Highlight text using word boundaries from Edge TTS
+        function highlightTextWithWordBoundaries() {
+            if (!window.rendition || ttsWordBoundaries.length === 0) return;
+
+            try {
+                const iframe = document.querySelector('iframe');
+                if (!iframe || !iframe.contentDocument) {
+                    console.warn('Cannot access iframe for highlighting');
+                    return;
+                }
+
+                const doc = iframe.contentDocument;
+                const paragraphs = doc.querySelectorAll('p, div.text, span.sentence');
+
+                if (paragraphs.length === 0) {
+                    console.warn('No paragraphs found for highlighting');
+                    return;
+                }
+
+                console.log(`Highlighting with ${ttsWordBoundaries.length} word boundaries`);
+
+                // Convert nanosecond offsets to milliseconds and group by paragraph
+                const totalWords = ttsWordBoundaries.length;
+                const wordsPerParagraph = Math.ceil(totalWords / paragraphs.length);
+
+                let currentParagraphIndex = 0;
+                let wordIndex = 0;
+
+                ttsWordBoundaries.forEach((boundary, index) => {
+                    const timeMs = boundary.offset / 10000; // Convert 100ns to ms
+
+                    // Calculate which paragraph this word belongs to
+                    const paragraphIndex = Math.min(
+                        Math.floor(index / wordsPerParagraph),
+                        paragraphs.length - 1
+                    );
+
+                    if (paragraphIndex !== currentParagraphIndex) {
+                        currentParagraphIndex = paragraphIndex;
+                        wordIndex = 0;
+                    }
+
+                    const timeout = setTimeout(() => {
+                        if (!ttsPlaying) return;
+
+                        // Remove previous highlight
+                        if (currentHighlightedElement && wordIndex === 0) {
+                            currentHighlightedElement.style.backgroundColor = '';
+                        }
+
+                        // Highlight current paragraph
+                        const p = paragraphs[paragraphIndex];
+                        if (p) {
+                            p.style.backgroundColor = 'rgba(102, 126, 234, 0.3)';
+                            p.style.transition = 'background-color 0.3s ease';
+                            currentHighlightedElement = p;
+
+                            // Scroll to highlighted paragraph (once per paragraph)
+                            if (wordIndex === 0) {
+                                try {
+                                    p.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                } catch (e) {
+                                    console.warn('Scroll failed:', e);
+                                }
+                            }
+                        }
+
+                        wordIndex++;
+                    }, timeMs);
+
+                    highlightTimeouts.push(timeout);
+                });
+
+                // Remove highlight at the very end
+                const lastBoundary = ttsWordBoundaries[ttsWordBoundaries.length - 1];
+                const finalTimeMs = (lastBoundary.offset + lastBoundary.duration) / 10000;
+
+                const endTimeout = setTimeout(() => {
+                    if (currentHighlightedElement) {
+                        currentHighlightedElement.style.backgroundColor = '';
+                        currentHighlightedElement = null;
+                    }
+                }, finalTimeMs);
+
+                highlightTimeouts.push(endTimeout);
+
+            } catch (error) {
+                console.error('Error highlighting text:', error);
+            }
+        }
+
+        // Change TTS voice
+        function changeTTSVoice() {
+            const voiceSelect = document.getElementById('tts-voice');
+            ttsCurrentVoice = voiceSelect.value;
+
+            const selectedVoice = window.edgeKoreanVoices.find(v => v.name === ttsCurrentVoice);
+            console.log('Voice changed to:', selectedVoice?.label);
+            updateTTSStatus(`목소리 변경: ${selectedVoice?.label || ttsCurrentVoice}`);
+        }
+
+        // Change TTS speed
+        function changeTTSSpeed() {
+            const speedSlider = document.getElementById('tts-speed');
+            const speedValSpan = document.getElementById('tts-speed-val');
+            ttsCurrentSpeed = parseFloat(speedSlider.value);
+            speedValSpan.textContent = ttsCurrentSpeed.toFixed(1) + 'x';
+            console.log('Speed changed to:', ttsCurrentSpeed);
+        }
+
+        // Change TTS pitch
+        function changeTTSPitch() {
+            const pitchSlider = document.getElementById('tts-pitch');
+            const pitchValSpan = document.getElementById('tts-pitch-val');
+            ttsCurrentPitch = parseFloat(pitchSlider.value);
+            pitchValSpan.textContent = ttsCurrentPitch.toFixed(1);
+            console.log('Pitch changed to:', ttsCurrentPitch);
         }
     </script>
 </body>
