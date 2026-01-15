@@ -354,6 +354,21 @@
             dark: { body: { background: '#1a1a1a', color: '#ccc' } }
         };
 
+        // Load settings from localStorage (must be before fetching book)
+        // TTS variables will be defined later, so we save for later application
+        let savedSettings = null;
+        try {
+            const saved = localStorage.getItem('epub-reader-settings');
+            if (saved) {
+                savedSettings = JSON.parse(saved);
+                if (savedSettings.theme) currentTheme = savedSettings.theme;
+                if (savedSettings.fontSize) currentFontSize = savedSettings.fontSize;
+                console.log('📥 Pre-loaded settings:', savedSettings);
+            }
+        } catch (e) {
+            console.error('Error pre-loading settings:', e);
+        }
+
         // Fetch book as ArrayBuffer
         fetch(bookUrl)
             .then(response => {
@@ -448,6 +463,52 @@
             document.getElementById('settings').classList.toggle('active');
         }
 
+        // ============= LOCAL STORAGE SETTINGS =============
+        const SETTINGS_KEY = 'epub-reader-settings';
+
+        // Load settings from localStorage
+        function loadSettings() {
+            try {
+                const saved = localStorage.getItem(SETTINGS_KEY);
+                if (saved) {
+                    const settings = JSON.parse(saved);
+                    console.log('📥 Loading saved settings:', settings);
+
+                    // Apply reader settings
+                    if (settings.theme) currentTheme = settings.theme;
+                    if (settings.fontSize) currentFontSize = settings.fontSize;
+
+                    // Apply TTS settings
+                    if (settings.ttsVoice) ttsCurrentVoice = settings.ttsVoice;
+                    if (settings.ttsSpeed) ttsCurrentSpeed = settings.ttsSpeed;
+                    if (settings.ttsPitch) ttsCurrentPitch = settings.ttsPitch;
+
+                    console.log('✅ Settings loaded successfully');
+                    return settings;
+                }
+            } catch (error) {
+                console.error('❌ Error loading settings:', error);
+            }
+            return null;
+        }
+
+        // Save settings to localStorage
+        function saveSettings() {
+            try {
+                const settings = {
+                    theme: currentTheme,
+                    fontSize: currentFontSize,
+                    ttsVoice: ttsCurrentVoice,
+                    ttsSpeed: ttsCurrentSpeed,
+                    ttsPitch: ttsCurrentPitch
+                };
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+                console.log('💾 Settings saved:', settings);
+            } catch (error) {
+                console.error('❌ Error saving settings:', error);
+            }
+        }
+
         // Settings Functions
         function setTheme(theme) {
             currentTheme = theme;
@@ -455,12 +516,15 @@
                 window.rendition.themes.select(theme);
                 document.body.style.background = themes[theme].body.background;
             }
-            
+
             // Update buttons
             document.querySelectorAll('.theme-btn').forEach(btn => {
                 btn.classList.remove('active');
                 if (btn.classList.contains(`theme-${theme}`)) btn.classList.add('active');
             });
+
+            // Save to localStorage
+            saveSettings();
         }
 
         function changeFontSize(dir) {
@@ -469,6 +533,9 @@
             if (currentFontSize > 200) currentFontSize = 200;
             if (window.rendition) window.rendition.themes.fontSize(currentFontSize + "%");
             document.getElementById('fs-val').innerText = currentFontSize + "%";
+
+            // Save to localStorage
+            if (dir !== 0) saveSettings(); // Only save if actually changed
         }
 
         function setFont(font) {
@@ -477,7 +544,22 @@
 
         function applySettings() {
             setTheme(currentTheme);
-            changeFontSize(0); 
+            changeFontSize(0);
+
+            // Update TTS UI with saved settings
+            const speedSlider = document.getElementById('tts-speed');
+            const speedValSpan = document.getElementById('tts-speed-val');
+            const pitchSlider = document.getElementById('tts-pitch');
+            const pitchValSpan = document.getElementById('tts-pitch-val');
+
+            if (speedSlider) {
+                speedSlider.value = ttsCurrentSpeed;
+                if (speedValSpan) speedValSpan.textContent = ttsCurrentSpeed.toFixed(1) + 'x';
+            }
+            if (pitchSlider) {
+                pitchSlider.value = ttsCurrentPitch;
+                if (pitchValSpan) pitchValSpan.textContent = ttsCurrentPitch.toFixed(1);
+            }
         }
 
         let saveTimeout;
@@ -534,6 +616,18 @@
         function initializeTTS() {
             console.log('✅ Edge TTS 초기화 시작 (백엔드)');
 
+            // Apply saved TTS settings if available
+            if (savedSettings) {
+                if (savedSettings.ttsVoice) ttsCurrentVoice = savedSettings.ttsVoice;
+                if (savedSettings.ttsSpeed) ttsCurrentSpeed = savedSettings.ttsSpeed;
+                if (savedSettings.ttsPitch) ttsCurrentPitch = savedSettings.ttsPitch;
+                console.log('📥 Applied TTS settings:', {
+                    voice: ttsCurrentVoice,
+                    speed: ttsCurrentSpeed,
+                    pitch: ttsCurrentPitch
+                });
+            }
+
             // Load Korean voices from backend
             loadVoicesFromBackend();
             updateTTSStatus('준비 완료. 읽기 시작 버튼을 눌러주세요');
@@ -570,13 +664,19 @@
                 const option = document.createElement('option');
                 option.value = voice.name;
                 option.textContent = voice.label;
-                if (index === 0) {
+
+                // Select saved voice or default to first
+                if (voice.name === ttsCurrentVoice) {
                     option.selected = true;
+                } else if (index === 0 && !ttsCurrentVoice) {
+                    option.selected = true;
+                    ttsCurrentVoice = voice.name;
                 }
+
                 voiceSelect.appendChild(option);
             });
 
-            console.log(`${window.edgeKoreanVoices.length}개 한국어 음성 로드됨`);
+            console.log(`${window.edgeKoreanVoices.length}개 한국어 음성 로드됨 (선택: ${ttsCurrentVoice})`);
         }
 
         // Toggle play/pause
@@ -626,107 +726,63 @@
             ttsPlaying = false;
         }
 
-        // Extract text from current EPUB page starting from visible position
+        // Extract text from current EPUB page
+        // EPUB.js renders one page at a time, so we read the entire current page
         function extractPageText() {
             if (!window.rendition) return '';
 
             try {
                 const iframe = document.querySelector('iframe');
                 if (!iframe || !iframe.contentDocument) {
-                    console.warn('Cannot access iframe content');
+                    console.warn('❌ Cannot access iframe content');
                     return '';
                 }
 
                 const doc = iframe.contentDocument;
                 const body = doc.body;
-                const win = iframe.contentWindow;
-
-                // Get viewport dimensions
-                const viewportHeight = win.innerHeight || doc.documentElement.clientHeight;
 
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                console.log('📖 TTS Text Extraction Starting...');
-                console.log(`📐 Viewport Height: ${viewportHeight}px`);
+                console.log('📖 TTS: Extracting current EPUB page text');
 
-                // Get all block-level elements that typically contain readable text
-                // Prioritize paragraph elements to avoid nested duplication
+                // Get all block-level text elements (avoid nested duplication)
                 const blockElements = Array.from(body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, li, blockquote, pre'));
 
-                console.log(`📄 Found ${blockElements.length} block elements in page`);
+                console.log(`📄 Found ${blockElements.length} block elements`);
 
-                // If no block elements found, fallback to all text
+                // If no block elements, use body text as fallback
                 if (blockElements.length === 0) {
-                    console.log('⚠️ No block elements found, using body text');
-                    return (body.innerText || body.textContent || '').trim().substring(0, 1000);
+                    const bodyText = (body.innerText || body.textContent || '').trim();
+                    console.log(`⚠️ No block elements, using body text: ${bodyText.length} chars`);
+                    return bodyText.substring(0, 1000);
                 }
 
-                // Collect visible and subsequent text
+                // Collect all text from block elements
                 let textContent = '';
-                let visibleElementsFound = 0;
-                let firstVisibleIndex = -1;
+                let elementCount = 0;
 
-                blockElements.forEach((element, index) => {
-                    const rect = element.getBoundingClientRect();
+                for (const element of blockElements) {
+                    const text = (element.innerText || element.textContent || '').trim();
 
-                    // Element is visible if:
-                    // - Its bottom is below the top of viewport (rect.bottom > 0)
-                    // - Its top is below the bottom of viewport (rect.top < viewportHeight)
-                    const isVisible = rect.bottom > 0 && rect.top < viewportHeight;
-                    const isBelowViewport = rect.top >= viewportHeight;
+                    if (text) {
+                        // Add space between blocks
+                        if (textContent && !textContent.endsWith(' ')) {
+                            textContent += ' ';
+                        }
+                        textContent += text;
+                        elementCount++;
 
-                    // Debug first few elements
-                    if (index < 5 || isVisible) {
-                        console.log(`Element ${index}: top=${rect.top.toFixed(1)}px, bottom=${rect.bottom.toFixed(1)}px, visible=${isVisible}, text="${element.textContent.substring(0, 30)}..."`);
-                    }
-
-                    // Start collecting from first visible element
-                    if (isVisible && firstVisibleIndex === -1) {
-                        firstVisibleIndex = index;
-                        visibleElementsFound++;
-                        console.log(`✅ First visible element at index ${index}`);
-                    }
-
-                    // Collect text from visible and all subsequent elements
-                    if (firstVisibleIndex !== -1 && index >= firstVisibleIndex) {
-                        const text = element.innerText || element.textContent || '';
-                        const trimmedText = text.trim();
-
-                        if (trimmedText) {
-                            // Add space between paragraphs
-                            if (textContent && !textContent.endsWith(' ')) {
-                                textContent += ' ';
-                            }
-                            textContent += trimmedText;
-
-                            // Stop if we have enough text
-                            if (textContent.length >= 1000) {
-                                console.log(`⏹️ Stopped at element ${index} (reached 1000 chars)`);
-                                return;
-                            }
+                        // Stop at 1000 chars to avoid too long audio
+                        if (textContent.length >= 1000) {
+                            console.log(`⏹️ Stopped at element ${elementCount} (reached 1000 chars)`);
+                            break;
                         }
                     }
-                });
-
-                // If no visible element found (e.g., scrolled to very end), start from beginning
-                if (firstVisibleIndex === -1) {
-                    console.log('⚠️ No visible element found, reading from start');
-                    blockElements.slice(0, 10).forEach(element => {
-                        const text = (element.innerText || element.textContent || '').trim();
-                        if (text) {
-                            if (textContent && !textContent.endsWith(' ')) {
-                                textContent += ' ';
-                            }
-                            textContent += text;
-                            if (textContent.length >= 1000) return;
-                        }
-                    });
                 }
 
                 textContent = textContent.trim();
 
-                // Limit to 1000 chars and find sentence boundary
+                // Truncate at sentence boundary if needed
                 if (textContent.length > 1000) {
-                    console.log(`✂️ Truncating from ${textContent.length} to 1000 chars`);
                     textContent = textContent.substring(0, 1000);
 
                     // Find last sentence ending
@@ -740,14 +796,14 @@
                     ];
                     const lastSentence = Math.max(...endings);
 
-                    if (lastSentence > 500) { // Only cut at sentence if we have enough text
+                    if (lastSentence > 500) {
                         textContent = textContent.substring(0, lastSentence + 1);
-                        console.log(`✂️ Cut at sentence boundary: ${textContent.length} chars`);
+                        console.log(`✂️ Cut at sentence: ${textContent.length} chars`);
                     }
                 }
 
-                console.log(`✅ Extracted ${textContent.length} chars`);
-                console.log(`📝 First 100 chars: "${textContent.substring(0, 100)}..."`);
+                console.log(`✅ Extracted ${textContent.length} chars from ${elementCount} elements`);
+                console.log(`📝 Preview: "${textContent.substring(0, 100)}..."`);
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
                 return textContent;
@@ -984,6 +1040,9 @@
             const selectedVoice = window.edgeKoreanVoices.find(v => v.name === ttsCurrentVoice);
             console.log('Voice changed to:', selectedVoice?.label);
             updateTTSStatus(`목소리 변경: ${selectedVoice?.label || ttsCurrentVoice}`);
+
+            // Save to localStorage
+            saveSettings();
         }
 
         // Change TTS speed
@@ -993,6 +1052,9 @@
             ttsCurrentSpeed = parseFloat(speedSlider.value);
             speedValSpan.textContent = ttsCurrentSpeed.toFixed(1) + 'x';
             console.log('Speed changed to:', ttsCurrentSpeed);
+
+            // Save to localStorage
+            saveSettings();
         }
 
         // Change TTS pitch
@@ -1002,6 +1064,9 @@
             ttsCurrentPitch = parseFloat(pitchSlider.value);
             pitchValSpan.textContent = ttsCurrentPitch.toFixed(1);
             console.log('Pitch changed to:', ttsCurrentPitch);
+
+            // Save to localStorage
+            saveSettings();
         }
     </script>
 </body>
