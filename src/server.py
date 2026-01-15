@@ -3474,15 +3474,12 @@ async def synthesize_tts(
 @app.get("/api/tts/voices")
 async def get_tts_voices():
     """Get list of available TTS voices (Korean)"""
+    # NOTE: As of 2025, Microsoft Edge TTS only supports 3 Korean voices
+    # Many voices were removed in recent Edge TTS API updates
     voices = [
         {"name": "ko-KR-SunHiNeural", "label": "선희 (여성, 자연스러움)", "gender": "Female"},
         {"name": "ko-KR-InJoonNeural", "label": "인준 (남성)", "gender": "Male"},
-        {"name": "ko-KR-BongJinNeural", "label": "봉진 (남성)", "gender": "Male"},
-        {"name": "ko-KR-GookMinNeural", "label": "국민 (남성)", "gender": "Male"},
-        {"name": "ko-KR-JiMinNeural", "label": "지민 (여성)", "gender": "Female"},
-        {"name": "ko-KR-SeoHyeonNeural", "label": "서현 (여성)", "gender": "Female"},
-        {"name": "ko-KR-SoonBokNeural", "label": "순복 (여성)", "gender": "Female"},
-        {"name": "ko-KR-YuJinNeural", "label": "유진 (여성)", "gender": "Female"}
+        {"name": "ko-KR-HyunsuMultilingualNeural", "label": "현수 (남성, 다국어)", "gender": "Male"}
     ]
     return {"voices": voices}
 
