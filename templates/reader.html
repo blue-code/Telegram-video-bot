@@ -738,71 +738,37 @@
         }
 
         // Extract text from next page until sentence ends
+        // Simple approach: get all text from iframe body and find continuation
         async function getNextPageSentenceCompletion() {
             if (!window.rendition || !window.book) return '';
 
             try {
-                // Get next page location
-                const currentLoc = window.rendition.currentLocation();
-                if (!currentLoc || !currentLoc.end) return '';
+                console.log('🔗 Getting text to complete sentence...');
 
-                // Get a bit more text from after endCFI to complete the sentence
-                const endCFI = currentLoc.end.cfi;
-
-                console.log('🔗 Getting next page text to complete sentence...');
-
-                // Get range starting from current page end
-                const nextRange = await window.book.getRange(endCFI);
-                if (!nextRange) return '';
-
-                // Get text from iframe starting at endCFI position
+                // Get iframe body text
                 const iframe = document.querySelector('iframe');
                 if (!iframe || !iframe.contentDocument) return '';
 
                 const doc = iframe.contentDocument;
+                const body = doc.body;
 
-                // Create range from endCFI to find next sentence ending
-                let nextText = '';
+                // Get all text from body
+                const allText = (body.innerText || body.textContent || '').trim();
 
-                const walker = doc.createTreeWalker(
-                    nextRange.endContainer.nodeType === 3 ? nextRange.endContainer.parentNode : nextRange.endContainer,
-                    NodeFilter.SHOW_TEXT,
-                    null
-                );
+                console.log(`📄 Total iframe text: ${allText.length} chars`);
 
-                let node;
-                let charCount = 0;
-                const maxChars = 200; // Max chars to look ahead
+                // Find the next sentence ending (up to 300 chars)
+                const searchText = allText.substring(0, 300);
+                const sentenceEndIndex = findNextSentenceEnd(searchText);
 
-                while ((node = walker.nextNode()) && charCount < maxChars) {
-                    const text = node.textContent || '';
-                    nextText += text;
-                    charCount += text.length;
-
-                    // Check if we found a sentence ending
-                    const sentenceEndIndex = findNextSentenceEnd(nextText);
-                    if (sentenceEndIndex !== -1) {
-                        nextText = nextText.substring(0, sentenceEndIndex + 1);
-                        console.log(`✅ Found sentence end in next page: "${nextText}"`);
-
-                        // Save this text to skip on next page
-                        ttsAlreadyReadText = nextText.trim();
-                        console.log(`💾 Saved already-read text (${ttsAlreadyReadText.length} chars) to skip on next page`);
-
-                        return nextText;
-                    }
+                if (sentenceEndIndex !== -1) {
+                    const completionText = searchText.substring(0, sentenceEndIndex + 1);
+                    console.log(`✅ Found sentence completion: "${completionText.substring(0, 100)}..."`);
+                    return ' ' + completionText; // Add space before
+                } else {
+                    console.log(`⚠️ No sentence end found in first 300 chars`);
+                    return '';
                 }
-
-                // If no sentence end found, return what we have (up to maxChars)
-                console.log(`⚠️ No sentence end found, returning partial: "${nextText.substring(0, 100)}..."`);
-
-                // Save partial text as well
-                if (nextText.trim()) {
-                    ttsAlreadyReadText = nextText.trim();
-                    console.log(`💾 Saved partial already-read text (${ttsAlreadyReadText.length} chars)`);
-                }
-
-                return nextText;
 
             } catch (error) {
                 console.warn('⚠️ Could not get next page text:', error.message);
@@ -882,27 +848,29 @@
                     console.log(`✅ Extracted ${rangeText.length} chars from CFI Range`);
                     console.log(`📝 Preview: "${rangeText.substring(0, 100)}..."`);
 
+                    // Save ORIGINAL page text before any modifications (for overlap detection on next page)
+                    const originalPageText = rangeText;
+
                     // Check if we need to skip already-read text from previous page
                     if (ttsAlreadyReadText) {
-                        console.log(`📌 Checking for already-read text (${ttsAlreadyReadText.length} chars)`);
+                        console.log(`📌 Checking for overlap with previous page (${ttsAlreadyReadText.length} chars)`);
 
-                        // Check if current page starts with the already-read text
-                        if (rangeText.startsWith(ttsAlreadyReadText)) {
-                            console.log(`✂️ Skipping already-read text: "${ttsAlreadyReadText.substring(0, 50)}..."`);
-                            rangeText = rangeText.substring(ttsAlreadyReadText.length).trim();
-                            console.log(`✅ After skipping: ${rangeText.length} chars remaining`);
+                        // Find overlap: where does the previous page's text appear in current page?
+                        // Try last 100 chars of previous page to find the continuation point
+                        const overlapSearchLength = Math.min(100, ttsAlreadyReadText.length);
+                        const overlapSearch = ttsAlreadyReadText.substring(ttsAlreadyReadText.length - overlapSearchLength);
+
+                        const overlapIndex = rangeText.indexOf(overlapSearch);
+
+                        if (overlapIndex !== -1) {
+                            // Found overlap! Skip to the end of the overlap
+                            const skipLength = overlapIndex + overlapSearchLength;
+                            console.log(`✂️ Found overlap at position ${overlapIndex}, skipping ${skipLength} chars`);
+                            console.log(`   Overlap text: "${overlapSearch.substring(0, 50)}..."`);
+                            rangeText = rangeText.substring(skipLength).trim();
+                            console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
                         } else {
-                            // Try fuzzy match (first 50 chars)
-                            const alreadyReadStart = ttsAlreadyReadText.substring(0, 50);
-                            const rangeTextStart = rangeText.substring(0, 50);
-
-                            if (rangeTextStart.includes(alreadyReadStart) || alreadyReadStart.includes(rangeTextStart)) {
-                                console.log(`✂️ Fuzzy match - skipping: "${ttsAlreadyReadText.substring(0, 50)}..."`);
-                                rangeText = rangeText.substring(ttsAlreadyReadText.length).trim();
-                                console.log(`✅ After fuzzy skip: ${rangeText.length} chars remaining`);
-                            } else {
-                                console.log(`⚠️ Already-read text not found at start of page. Not skipping.`);
-                            }
+                            console.log(`⚠️ No overlap found. Reading from page start.`);
                         }
 
                         // Clear after use
@@ -918,6 +886,10 @@
                         if (nextPageText) {
                             rangeText += nextPageText;
                             console.log(`✅ Completed sentence. Total: ${rangeText.length} chars`);
+
+                            // Save ORIGINAL page text (before overlap skip) to detect overlap on next page
+                            ttsAlreadyReadText = originalPageText;
+                            console.log(`💾 Saved original page text (${ttsAlreadyReadText.length} chars) for overlap detection`);
                         }
                     } else {
                         console.log('✅ Text ends with complete sentence');
