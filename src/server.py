@@ -3378,3 +3378,100 @@ async def update_video(
         return {"success": False, "message": str(e)}
 
 
+# ============= TTS API =============
+@app.post("/api/tts/synthesize")
+async def synthesize_tts(
+    text: str = Body(..., embed=True),
+    voice: str = Body("ko-KR-SunHiNeural", embed=True),
+    rate: str = Body("+0%", embed=True),
+    pitch: str = Body("+0Hz", embed=True),
+    volume: str = Body("+0%", embed=True)
+):
+    """
+    Synthesize text to speech using Microsoft Edge TTS.
+
+    Args:
+        text: Text to synthesize (max 1000 chars)
+        voice: Voice name (e.g., ko-KR-SunHiNeural)
+        rate: Speech rate (e.g., +10%, -20%)
+        pitch: Speech pitch (e.g., +5Hz, -10Hz)
+        volume: Speech volume (e.g., +10%, -20%)
+
+    Returns:
+        Audio MP3 file with word boundaries metadata
+    """
+    import edge_tts
+    from io import BytesIO
+    import base64
+
+    try:
+        # Validate text length
+        if len(text) > 1000:
+            raise HTTPException(status_code=400, detail="Text too long (max 1000 characters)")
+
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Text cannot be empty")
+
+        logger.info(f"TTS synthesis request: voice={voice}, text_len={len(text)}")
+
+        # Create communicate instance
+        communicate = edge_tts.Communicate(
+            text=text,
+            voice=voice,
+            rate=rate,
+            pitch=pitch,
+            volume=volume
+        )
+
+        # Collect audio chunks and word boundaries
+        audio_chunks = []
+        word_boundaries = []
+
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_chunks.append(chunk["data"])
+            elif chunk["type"] == "WordBoundary":
+                word_boundaries.append({
+                    "offset": chunk["offset"],
+                    "duration": chunk["duration"],
+                    "text": chunk["text"]
+                })
+
+        if not audio_chunks:
+            raise HTTPException(status_code=500, detail="No audio generated")
+
+        # Combine audio chunks
+        audio_data = b"".join(audio_chunks)
+
+        logger.info(f"TTS synthesis complete: {len(audio_data)} bytes, {len(word_boundaries)} words")
+
+        # Return JSON with base64 encoded audio and word boundaries
+        audio_base64 = base64.b64encode(audio_data).decode('utf-8')
+
+        return JSONResponse({
+            "audio": audio_base64,
+            "subtitle": word_boundaries,
+            "size": len(audio_data)
+        })
+
+    except Exception as e:
+        logger.error(f"TTS synthesis error: {e}")
+        raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
+
+
+@app.get("/api/tts/voices")
+async def get_tts_voices():
+    """Get list of available TTS voices (Korean)"""
+    voices = [
+        {"name": "ko-KR-SunHiNeural", "label": "선희 (여성, 자연스러움)", "gender": "Female"},
+        {"name": "ko-KR-InJoonNeural", "label": "인준 (남성)", "gender": "Male"},
+        {"name": "ko-KR-BongJinNeural", "label": "봉진 (남성)", "gender": "Male"},
+        {"name": "ko-KR-GookMinNeural", "label": "국민 (남성)", "gender": "Male"},
+        {"name": "ko-KR-JiMinNeural", "label": "지민 (여성)", "gender": "Female"},
+        {"name": "ko-KR-SeoHyeonNeural", "label": "서현 (여성)", "gender": "Female"},
+        {"name": "ko-KR-SoonBokNeural", "label": "순복 (여성)", "gender": "Female"},
+        {"name": "ko-KR-YuJinNeural", "label": "유진 (여성)", "gender": "Female"}
+    ]
+    return {"voices": voices}
+
+
