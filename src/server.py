@@ -3413,6 +3413,8 @@ async def synthesize_tts(
             raise HTTPException(status_code=400, detail="Text cannot be empty")
 
         logger.info(f"TTS synthesis request: voice={voice}, text_len={len(text)}")
+        logger.info(f"TTS parameters: rate={rate}, pitch={pitch}, volume={volume}")
+        logger.info(f"TTS text preview: {text[:100]}...")
 
         # Create communicate instance
         communicate = edge_tts.Communicate(
@@ -3426,19 +3428,29 @@ async def synthesize_tts(
         # Collect audio chunks and word boundaries
         audio_chunks = []
         word_boundaries = []
+        chunk_count = 0
 
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_chunks.append(chunk["data"])
-            elif chunk["type"] == "WordBoundary":
-                word_boundaries.append({
-                    "offset": chunk["offset"],
-                    "duration": chunk["duration"],
-                    "text": chunk["text"]
-                })
+        try:
+            async for chunk in communicate.stream():
+                chunk_count += 1
+                if chunk["type"] == "audio":
+                    audio_chunks.append(chunk["data"])
+                    logger.debug(f"Received audio chunk {len(audio_chunks)}: {len(chunk['data'])} bytes")
+                elif chunk["type"] == "WordBoundary":
+                    word_boundaries.append({
+                        "offset": chunk["offset"],
+                        "duration": chunk["duration"],
+                        "text": chunk["text"]
+                    })
+        except Exception as stream_error:
+            logger.error(f"Error during stream: {stream_error}")
+            logger.error(f"Chunks received before error: {chunk_count}")
+            raise
+
+        logger.info(f"Stream complete: {chunk_count} chunks, {len(audio_chunks)} audio chunks")
 
         if not audio_chunks:
-            raise HTTPException(status_code=500, detail="No audio generated")
+            raise HTTPException(status_code=500, detail=f"No audio was received. Please verify that your parameters are correct.")
 
         # Combine audio chunks
         audio_data = b"".join(audio_chunks)
