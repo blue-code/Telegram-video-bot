@@ -868,21 +868,30 @@
                         console.log(`📌 Checking for overlap with previous page (${ttsAlreadyReadText.length} chars)`);
 
                         // Find overlap: where does the previous page's text appear in current page?
-                        // Try last 100 chars of previous page to find the continuation point
-                        const overlapSearchLength = Math.min(100, ttsAlreadyReadText.length);
-                        const overlapSearch = ttsAlreadyReadText.substring(ttsAlreadyReadText.length - overlapSearchLength);
+                        // Try progressively shorter searches: 50, 30, 20 chars
+                        const searchLengths = [50, 30, 20];
+                        let foundOverlap = false;
 
-                        const overlapIndex = rangeText.indexOf(overlapSearch);
+                        for (const searchLen of searchLengths) {
+                            if (searchLen > ttsAlreadyReadText.length) continue;
 
-                        if (overlapIndex !== -1) {
-                            // Found overlap! Skip to the end of the overlap
-                            const skipLength = overlapIndex + overlapSearchLength;
-                            console.log(`✂️ Found overlap at position ${overlapIndex}, skipping ${skipLength} chars`);
-                            console.log(`   Overlap text: "${overlapSearch.substring(0, 50)}..."`);
-                            rangeText = rangeText.substring(skipLength).trim();
-                            console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
-                        } else {
-                            console.log(`⚠️ No overlap found. Reading from page start.`);
+                            const overlapSearch = ttsAlreadyReadText.substring(ttsAlreadyReadText.length - searchLen);
+                            const overlapIndex = rangeText.indexOf(overlapSearch);
+
+                            if (overlapIndex !== -1) {
+                                // Found overlap! Skip to the end of the overlap
+                                const skipLength = overlapIndex + searchLen;
+                                console.log(`✂️ Found overlap (${searchLen} chars) at position ${overlapIndex}, skipping ${skipLength} chars`);
+                                console.log(`   Overlap text: "${overlapSearch.substring(0, 30)}..."`);
+                                rangeText = rangeText.substring(skipLength).trim();
+                                console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
+                                foundOverlap = true;
+                                break;
+                            }
+                        }
+
+                        if (!foundOverlap) {
+                            console.log(`⚠️ No overlap found with any search length. Reading from page start.`);
                         }
 
                         // Clear after use
