@@ -344,9 +344,13 @@
         const fileId = {{ file_id }};
         const userId = {{ user_id }};
 
+        console.log(`📚 Reader initialized - File ID: ${fileId}, User ID: ${userId}`);
+        console.log(`📖 Initial CFI: ${initialCfi ? initialCfi.substring(0, 50) + '...' : 'None (starting from beginning)'}`);
+
         // State
         let currentTheme = 'dark';
         let currentFontSize = 100;
+        let isGeneratingLocations = false; // Flag to prevent saving during location generation
         const themes = {
             light: { body: { background: '#fff', color: '#000' } },
             sepia: { body: { background: '#f4ecd8', color: '#5b4636' } },
@@ -388,12 +392,43 @@
                 window.book = book;
                 window.rendition = rendition;
 
-                // Render
+                // First display the book at saved position
                 const startPromise = initialCfi ? rendition.display(initialCfi) : rendition.display();
-                
+
                 startPromise.then(() => {
-                    document.getElementById('loading').style.display = 'none';
+                    console.log('📖 Book displayed, starting location generation...');
+
+                    // Use the CFI we already know (initialCfi if available, otherwise get current)
+                    const targetCfi = initialCfi || rendition.currentLocation().start.cfi;
+                    console.log(`💾 Target position: ${targetCfi.substring(0, 50)}...`);
+
+                    // Apply settings first (but keep loading screen)
                     applySettings();
+
+                    // Now generate locations in background for progress tracking
+                    book.ready.then(() => {
+                        isGeneratingLocations = true;
+                        console.log('📊 Generating book locations for progress tracking...');
+                        return book.locations.generate(1024);
+                    }).then(() => {
+                        console.log(`✅ Locations generated: ${book.locations.total} locations`);
+                        console.log(`🔄 Returning to target position: ${targetCfi.substring(0, 50)}...`);
+
+                        // Return to the target position after location generation
+                        return rendition.display(targetCfi);
+                    }).then(() => {
+                        console.log('✅ Returned to target position');
+                        isGeneratingLocations = false;
+
+                        // Hide loading screen only after reaching final position
+                        document.getElementById('loading').style.display = 'none';
+                    }).catch(err => {
+                        console.warn('Location generation error (non-critical):', err);
+                        isGeneratingLocations = false;
+
+                        // Hide loading screen even on error
+                        document.getElementById('loading').style.display = 'none';
+                    });
                 }).catch(err => {
                     console.warn('Display error with CFI, trying from beginning:', err);
                     rendition.display().then(() => {
@@ -429,14 +464,18 @@
                 rendition.on('relocated', (location) => {
                     const percent = location.start.percentage;
                     const cfi = location.start.cfi;
-                    
+
+                    console.log(`📍 Page relocated: ${(percent * 100).toFixed(1)}% ${isGeneratingLocations ? '(during location generation - not saving)' : ''}`);
+
                     // Update UI
                     if (document.getElementById('progress-bar')) {
                         document.getElementById('progress-bar').style.width = (percent * 100) + "%";
                     }
 
-                    // Save to server
-                    saveProgress(cfi, percent);
+                    // Save to server (but not during location generation)
+                    if (!isGeneratingLocations) {
+                        saveProgress(cfi, percent);
+                    }
                 });
             })
             .catch(err => {
@@ -566,6 +605,7 @@
         function saveProgress(cfi, percent) {
             clearTimeout(saveTimeout);
             saveTimeout = setTimeout(() => {
+                console.log(`💾 Saving reading progress: ${(percent * 100).toFixed(1)}%, CFI: ${cfi.substring(0, 50)}...`);
                 fetch('/api/epub/progress', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -575,7 +615,16 @@
                         cfi: cfi,
                         percent: percent * 100
                     })
-                }).catch(err => console.error('Failed to save progress', err));
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        console.log(`✅ Progress saved successfully`);
+                    } else {
+                        console.error('❌ Failed to save progress:', data.message);
+                    }
+                })
+                .catch(err => console.error('❌ Failed to save progress', err));
             }, 1000);
         }
 
@@ -866,23 +915,52 @@
                     // Check if we need to skip already-read text from previous page
                     if (ttsAlreadyReadText) {
                         console.log(`📌 Checking for overlap with previous page (${ttsAlreadyReadText.length} chars)`);
+                        console.log(`   Previous page end: "${ttsAlreadyReadText.substring(ttsAlreadyReadText.length - 50)}"`);
+                        console.log(`   Current page start: "${rangeText.substring(0, 50)}"`);
 
-                        // Find overlap: where does the previous page's text appear in current page?
-                        // Try progressively shorter searches: 50, 30, 20 chars
-                        const searchLengths = [50, 30, 20];
+                        // Normalize whitespace helper (multiple spaces → single space)
+                        const normalizeText = (text) => text.replace(/\s+/g, ' ').trim();
+
+                        // Try progressively shorter searches: 50, 30, 20, 15, 10 chars
+                        const searchLengths = [50, 30, 20, 15, 10];
                         let foundOverlap = false;
 
                         for (const searchLen of searchLengths) {
                             if (searchLen > ttsAlreadyReadText.length) continue;
 
+                            // Get search string from end of previous page
                             const overlapSearch = ttsAlreadyReadText.substring(ttsAlreadyReadText.length - searchLen);
-                            const overlapIndex = rangeText.indexOf(overlapSearch);
+
+                            // Try exact match first
+                            let overlapIndex = rangeText.indexOf(overlapSearch);
+
+                            // If not found, try normalized match
+                            if (overlapIndex === -1) {
+                                const normalizedSearch = normalizeText(overlapSearch);
+                                const normalizedCurr = normalizeText(rangeText);
+                                const normalizedIndex = normalizedCurr.indexOf(normalizedSearch);
+
+                                if (normalizedIndex !== -1) {
+                                    // Found in normalized text - find approximate position in original
+                                    // by counting non-whitespace chars
+                                    let charCount = 0;
+                                    overlapIndex = 0;
+                                    for (let i = 0; i < rangeText.length && charCount < normalizedIndex; i++) {
+                                        if (!/\s/.test(rangeText[i])) charCount++;
+                                        overlapIndex++;
+                                    }
+                                    console.log(`   Trying ${searchLen} chars (normalized): "${normalizedSearch.substring(0, 30)}..." → found at ~${overlapIndex}`);
+                                } else {
+                                    console.log(`   Trying ${searchLen} chars: "${overlapSearch.substring(0, 30)}..." → NOT FOUND`);
+                                }
+                            } else {
+                                console.log(`   Trying ${searchLen} chars: "${overlapSearch.substring(0, 30)}..." → found at ${overlapIndex}`);
+                            }
 
                             if (overlapIndex !== -1) {
                                 // Found overlap! Skip to the end of the overlap
                                 const skipLength = overlapIndex + searchLen;
                                 console.log(`✂️ Found overlap (${searchLen} chars) at position ${overlapIndex}, skipping ${skipLength} chars`);
-                                console.log(`   Overlap text: "${overlapSearch.substring(0, 30)}..."`);
                                 rangeText = rangeText.substring(skipLength).trim();
                                 console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
                                 foundOverlap = true;

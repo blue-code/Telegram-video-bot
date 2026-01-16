@@ -73,11 +73,14 @@ async def get_files(
 
 async def save_reading_progress(user_id: int, file_id: int, cfi: str, percent: float):
     """Save or update reading progress."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     sb = await get_database()
-    
+
     # Check if exists
     existing = await sb.table("reading_progress").select("id").eq("user_id", user_id).eq("file_id", file_id).execute()
-    
+
     data = {
         "user_id": user_id,
         "file_id": file_id,
@@ -85,20 +88,32 @@ async def save_reading_progress(user_id: int, file_id: int, cfi: str, percent: f
         "percent": percent,
         "updated_at": "now()"
     }
-    
+
     if existing.data:
         # Update
+        logger.info(f"💾 Updating reading progress: user={user_id}, file={file_id}, percent={percent:.1f}%, CFI={cfi[:50]}...")
         await sb.table("reading_progress").update(data).eq("id", existing.data[0]['id']).execute()
     else:
         # Insert
+        logger.info(f"💾 Inserting reading progress: user={user_id}, file={file_id}, percent={percent:.1f}%, CFI={cfi[:50]}...")
         await sb.table("reading_progress").insert(data).execute()
     return True
 
 async def get_reading_progress(user_id: int, file_id: int):
     """Get reading progress for a specific file."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     sb = await get_database()
     result = await sb.table("reading_progress").select("*").eq("user_id", user_id).eq("file_id", file_id).execute()
-    return result.data[0] if result.data else None
+
+    if result.data:
+        progress = result.data[0]
+        logger.info(f"📖 Loading reading progress: user={user_id}, file={file_id}, percent={progress.get('percent', 0):.1f}%, CFI={progress.get('cfi', '')[:50]}...")
+        return progress
+    else:
+        logger.info(f"📖 No reading progress found: user={user_id}, file={file_id}")
+        return None
 
 async def get_recent_reading(user_id: int):
     """Get the most recently read book."""
