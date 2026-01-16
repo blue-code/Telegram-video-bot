@@ -641,6 +641,10 @@
         let highlightTimeouts = [];
         let ttsAlreadyReadText = null; // Text already read from next page (to skip on auto-advance)
 
+        // TTS Prefetch Cache - preload next page audio for seamless playback
+        let ttsPrefetchCache = null; // { text, audioBlob, wordBoundaries }
+        let ttsPrefetchInProgress = false;
+
         // Microsoft Edge Korean voices (fallback)
         // NOTE: As of 2025, Microsoft Edge TTS only supports 3 Korean voices
         window.edgeKoreanVoices = [
@@ -771,6 +775,10 @@
 
             // Clear saved already-read text (user stopped, reset)
             ttsAlreadyReadText = null;
+
+            // Clear prefetch cache
+            ttsPrefetchCache = null;
+            ttsPrefetchInProgress = false;
 
             ttsPlaying = false;
         }
@@ -1083,6 +1091,159 @@
             }
         }
 
+        // Prefetch next page TTS audio in background
+        async function prefetchNextPageTTS() {
+            if (ttsPrefetchInProgress || !ttsPlaying) {
+                return;
+            }
+
+            ttsPrefetchInProgress = true;
+            console.log('🔮 Starting prefetch for next page...');
+
+            try {
+                // Temporarily go to next page
+                const currentLocation = window.rendition.currentLocation();
+                await window.rendition.next();
+
+                // Small delay to ensure layout is stable
+                await new Promise(resolve => setTimeout(resolve, 150));
+
+                // Extract next page text
+                const nextPageText = await extractPageText();
+
+                // Return to current page
+                await window.rendition.display(currentLocation.start.cfi);
+
+                if (!nextPageText || nextPageText.length < 10) {
+                    console.log('🔮 No text to prefetch on next page');
+                    ttsPrefetchCache = null;
+                    ttsPrefetchInProgress = false;
+                    return;
+                }
+
+                console.log(`🔮 Prefetching audio for next page (${nextPageText.length} chars)...`);
+
+                // Generate TTS audio
+                const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
+                const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
+                const pitchHz = Math.round((ttsCurrentPitch - 1.0) * 10);
+                const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
+                const volumePercent = Math.round((ttsCurrentVolume - 1.0) * 100);
+                const volumeStr = (volumePercent >= 0 ? '+' : '') + volumePercent + '%';
+
+                const tts = new window.EdgeTTS(nextPageText, ttsCurrentVoice, {
+                    rate: rateStr,
+                    pitch: pitchStr,
+                    volume: volumeStr
+                });
+
+                const result = await tts.synthesize();
+
+                // Store in cache
+                ttsPrefetchCache = {
+                    text: nextPageText,
+                    audioBlob: result.audio,
+                    wordBoundaries: result.subtitle
+                };
+
+                console.log(`✅ Prefetch complete: ${result.audio.size} bytes cached`);
+
+            } catch (error) {
+                console.warn('🔮 Prefetch failed (non-critical):', error.message);
+                ttsPrefetchCache = null;
+            } finally {
+                ttsPrefetchInProgress = false;
+            }
+        }
+
+        // Play prefetched audio from cache (instant playback)
+        async function playPrefetchedAudio() {
+            if (!ttsPrefetchCache) {
+                console.warn('No prefetch cache available, falling back to normal playback');
+                playCurrentPage();
+                return;
+            }
+
+            const { text: pageText, audioBlob, wordBoundaries } = ttsPrefetchCache;
+            ttsPrefetchCache = null; // Clear cache after use
+
+            console.log(`🚀 Playing prefetched audio (${pageText.length} chars, ${audioBlob.size} bytes)`);
+            updateTTSStatus('읽는 중...');
+
+            try {
+                // Store word boundaries for highlighting
+                ttsWordBoundaries = wordBoundaries;
+
+                // Create audio element
+                const audioUrl = URL.createObjectURL(audioBlob);
+                ttsAudioElement = new Audio(audioUrl);
+                ttsAudioElement.volume = ttsCurrentVolume;
+
+                // Audio event handlers
+                ttsAudioElement.onplay = () => {
+                    console.log('✅ Prefetched audio playback started');
+                    updateTTSStatus(`읽는 중... (${pageText.length}자)`);
+
+                    // Start highlighting with word boundaries
+                    if (ttsWordBoundaries.length > 0) {
+                        highlightTextWithWordBoundaries();
+                    }
+
+                    // Start prefetching next page audio in background
+                    prefetchNextPageTTS();
+                };
+
+                ttsAudioElement.onended = () => {
+                    console.log('Prefetched audio playback ended');
+
+                    // Clean up
+                    URL.revokeObjectURL(audioUrl);
+
+                    if (ttsPlaying) {
+                        // Auto-advance to next page
+                        updateTTSStatus('다음 페이지로 이동 중...');
+                        setTimeout(async () => {
+                            if (window.rendition) {
+                                await window.rendition.next();
+
+                                // Check if we have prefetched audio
+                                if (ttsPrefetchCache && ttsPlaying) {
+                                    console.log('🚀 Using prefetched audio (instant playback)');
+                                    playPrefetchedAudio();
+                                } else {
+                                    // Fallback to normal playback
+                                    console.log('🔄 No prefetch available, loading fresh...');
+                                    setTimeout(() => {
+                                        if (ttsPlaying) playCurrentPage();
+                                    }, 500);
+                                }
+                            }
+                        }, 300);
+                    } else {
+                        updateTTSStatus('읽기 완료');
+                    }
+                };
+
+                ttsAudioElement.onerror = (event) => {
+                    console.error('Prefetched audio error:', event);
+                    updateTTSStatus('오류: 오디오 재생 실패');
+                    ttsPlaying = false;
+                    const playPauseBtn = document.getElementById('tts-play-pause');
+                    playPauseBtn.textContent = '▶ 읽기 시작';
+                    playPauseBtn.classList.remove('playing');
+                    URL.revokeObjectURL(audioUrl);
+                };
+
+                // Start playback immediately
+                await ttsAudioElement.play();
+
+            } catch (error) {
+                console.error('Prefetched audio play error:', error);
+                // Fallback to normal playback
+                playCurrentPage();
+            }
+        }
+
         // Play TTS for current page using Edge TTS
         async function playCurrentPage() {
             // Wait a bit to ensure rendition layout is stable after fontSize changes
@@ -1159,6 +1320,9 @@
                     if (ttsWordBoundaries.length > 0) {
                         highlightTextWithWordBoundaries();
                     }
+
+                    // Start prefetching next page audio in background
+                    prefetchNextPageTTS();
                 };
 
                 ttsAudioElement.onended = () => {
@@ -1170,15 +1334,23 @@
                     if (ttsPlaying) {
                         // Auto-advance to next page
                         updateTTSStatus('다음 페이지로 이동 중...');
-                        setTimeout(() => {
+                        setTimeout(async () => {
                             if (window.rendition) {
-                                window.rendition.next();
-                                // Play next page after delay
-                                setTimeout(() => {
-                                    if (ttsPlaying) playCurrentPage();
-                                }, 1000);
+                                await window.rendition.next();
+
+                                // Check if we have prefetched audio
+                                if (ttsPrefetchCache && ttsPlaying) {
+                                    console.log('🚀 Using prefetched audio (instant playback)');
+                                    playPrefetchedAudio();
+                                } else {
+                                    // Fallback to normal playback
+                                    console.log('🔄 No prefetch available, loading fresh...');
+                                    setTimeout(() => {
+                                        if (ttsPlaying) playCurrentPage();
+                                    }, 500);
+                                }
                             }
-                        }, 500);
+                        }, 300);
                     } else {
                         updateTTSStatus('읽기 완료');
                     }
