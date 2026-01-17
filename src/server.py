@@ -72,8 +72,12 @@ async def startup_event():
         sb = await get_database()
         asyncio.create_task(cleanup_old_encoded_files(sb))
         asyncio.create_task(cleanup_old_downloads())
+        
+        # Start comic series migration (mostly harmless if already done)
+        from src.comic_migration import migrate_comic_series
+        asyncio.create_task(migrate_comic_series())
     except Exception as e:
-        logger.error(f"Failed to start cleanup tasks: {e}")
+        logger.error(f"Failed to start background tasks: {e}")
 
 # Add CORS middleware
 app.add_middleware(
