@@ -20,8 +20,8 @@
 
 ## Phase 3: 텔레그램 봇 핵심 기능 [checkpoint: 294d2de]
 - [x] Task: 봇 기본 명령어 (/start, /help) 및 비동기 루프 설정 d9c7bdb
-  - [ ] Sub-task: 명령어 핸들러 테스트 코드 작성
-  - [ ] Sub-task: 핸들러 및 봇 초기화 구현
+  - [x] Sub-task: 명령어 핸들러 테스트 코드 작성
+  - [x] Sub-task: 핸들러 및 봇 초기화 구현
 - [x] Task: URL 수신 및 인라인 버튼 메뉴 구현 6e8222a
   - [x] Sub-task: 메뉴 생성 및 콜백 핸들러 테스트 코드 작성
   - [x] Sub-task: 화질 선택 메뉴 및 상태 관리 구현
@@ -40,7 +40,7 @@
 - [x] Task: 저장된 영상을 URL 기반으로 즉시 재전송하는 기능 구현 799985e
   - [x] Sub-task: File ID 조회 및 전송 테스트 코드 작성
   - [x] Sub-task: 캐시(DB) 확인 및 재전송 로직 구현
-- [ ] Task: Conductor - User Manual Verification 'Phase 5: Streaming & MVP' (Protocol in workflow.md)
+- [x] Task: Conductor - User Manual Verification 'Phase 5: Streaming & MVP' (Protocol in workflow.md)
 
 ## Phase 6: 안정적인 저장소 (Bin Channel) [Pro]
 - [x] Task: Bin Channel 연동 및 파일 관리 로직 구현 34afab1
