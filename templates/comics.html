@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>만화책 라이브러리 - TVB</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="/static/nav.js"></script>
+    <style>
+        /* Reuse styles from books.html */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        .page-header { text-align: center; margin-bottom: 30px; }
+        .page-title { font-size: 36px; font-weight: 700; margin-bottom: 10px; }
+        .page-subtitle { font-size: 16px; color: #e0e0e0; }
+
+        /* Search and Filters */
+        .search-bar {
+            max-width: 600px; margin: 0 auto 30px; position: relative;
+        }
+        .search-input {
+            width: 100%; padding: 15px 50px 15px 20px; border: none; border-radius: 30px;
+            background: rgba(0,0,0,0.3); color: #fff; font-size: 16px;
+            backdrop-filter: blur(10px);
+        }
+        .search-input:focus { outline: none; background: rgba(0,0,0,0.5); }
+        .search-btn {
+            position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+            background: #667eea; border: none; border-radius: 50%;
+            width: 40px; height: 40px; color: #fff; cursor: pointer;
+        }
+
+        .filters {
+            display: flex; gap: 10px; justify-content: center; margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 8px 16px; border: none; border-radius: 20px;
+            background: rgba(255,255,255,0.1); color: #fff; cursor: pointer;
+            font-size: 14px; transition: all 0.3s;
+        }
+        .filter-btn.active, .filter-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+
+        /* Grid */
+        .comic-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 30px;
+        }
+
+        .comic-card {
+            background: rgba(0,0,0,0.2); border-radius: 12px; overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer; position: relative;
+            display: flex; flex-direction: column;
+        }
+        .comic-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+            background: rgba(0,0,0,0.4);
+        }
+
+        .comic-cover {
+            width: 100%; aspect-ratio: 2/3; background: #2d3748;
+            position: relative; overflow: hidden;
+        }
+        .comic-cover img {
+            width: 100%; height: 100%; object-fit: cover;
+        }
+        .comic-placeholder {
+            width: 100%; height: 100%; display: flex;
+            align-items: center; justify-content: center;
+            font-size: 48px; color: rgba(255,255,255,0.2);
+            background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%);
+        }
+
+        /* Volume badge */
+        .volume-badge {
+            position: absolute; top: 10px; right: 10px;
+            background: rgba(102, 126, 234, 0.9); color: #fff;
+            padding: 4px 10px; border-radius: 12px;
+            font-size: 12px; font-weight: 600;
+        }
+
+        .comic-info { padding: 15px; flex: 1; display: flex; flex-direction: column; }
+        .comic-title {
+            font-weight: 600; font-size: 16px; margin-bottom: 5px;
+            overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
+            -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+            line-height: 1.4;
+        }
+        .comic-series {
+            font-size: 13px; color: #aaa; margin-bottom: 5px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .comic-meta {
+            margin-top: auto; font-size: 12px; color: #888;
+            display: flex; justify-content: space-between;
+        }
+
+        .empty-state { text-align: center; padding: 60px; color: rgba(255,255,255,0.6); }
+
+        /* Pagination */
+        .pagination {
+            display: flex; justify-content: center; gap: 10px; margin-top: 40px;
+            align-items: center;
+        }
+        .pagination a, .pagination span {
+            padding: 8px 16px; background: rgba(255,255,255,0.1);
+            color: #fff; border-radius: 6px; text-decoration: none;
+            transition: all 0.3s;
+        }
+        .pagination a:hover {
+            background: rgba(255,255,255,0.25);
+        }
+        .pagination .current {
+            background: rgba(102, 126, 234, 0.5);
+            font-weight: 600;
+        }
+
+        @media (max-width: 600px) {
+            .comic-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 15px; }
+            .page-title { font-size: 28px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="tvb-nav-container"></div>
+        <script>
+            insertTVBNav({{ user_id }}, 'comics');
+        </script>
+
+        <div class="page-header">
+            <h1 class="page-title">📚 만화책 라이브러리</h1>
+            <p class="page-subtitle">총 {{ total_count }}권의 만화책</p>
+        </div>
+
+        <form class="search-bar" action="/comics/{{ user_id }}" method="GET">
+            <input type="text" name="q" class="search-input"
+                   placeholder="제목이나 시리즈명으로 검색..." value="{{ query }}">
+            <button type="submit" class="search-btn">🔍</button>
+        </form>
+
+        <div class="filters">
+            <a href="/comics/{{ user_id }}?sort_by=latest" class="filter-btn {% if sort_by == 'latest' %}active{% endif %}">
+                최신순
+            </a>
+            <a href="/comics/{{ user_id }}?sort_by=series" class="filter-btn {% if sort_by == 'series' %}active{% endif %}">
+                시리즈별
+            </a>
+            <a href="/comics/{{ user_id }}?sort_by=title" class="filter-btn {% if sort_by == 'title' %}active{% endif %}">
+                제목순
+            </a>
+            <a href="/comic_series/{{ user_id }}" class="filter-btn">
+                📂 시리즈 보기
+            </a>
+        </div>
+
+        {% if comics %}
+        <div class="comic-grid">
+            {% for comic in comics %}
+            <div class="comic-card" onclick="window.location.href='/comic_reader/{{ comic.file_id }}?user_id={{ user_id }}'">
+                <div class="comic-cover">
+                    {% if comic.cover_url %}
+                        <img src="{{ comic.cover_url }}" alt="{{ comic.title }}" loading="lazy">
+                    {% else %}
+                        <div class="comic-placeholder">📖</div>
+                    {% endif %}
+                    {% if comic.volume %}
+                    <div class="volume-badge">{{ comic.volume }}권</div>
+                    {% endif %}
+                </div>
+                <div class="comic-info">
+                    <div class="comic-title" title="{{ comic.title }}">{{ comic.title }}</div>
+                    {% if comic.series and comic.series != comic.title %}
+                    <div class="comic-series">{{ comic.series }}</div>
+                    {% endif %}
+                    <div class="comic-meta">
+                        <span>{% if comic.page_count %}{{ comic.page_count }}p{% endif %}</span>
+                        <span>{% if comic.size_mb %}{{ comic.size_mb }} MB{% endif %}</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <div class="pagination">
+            {% if page > 1 %}
+            <a href="?page={{ page - 1 }}&q={{ query }}&sort_by={{ sort_by }}">◀ 이전</a>
+            {% endif %}
+            <span class="current">{{ page }} / {{ total_pages }}</span>
+            {% if page < total_pages %}
+            <a href="?page={{ page + 1 }}&q={{ query }}&sort_by={{ sort_by }}">다음 ▶</a>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% else %}
+        <div class="empty-state">
+            <div style="font-size: 64px; margin-bottom: 20px;">📚</div>
+            <p>만화책이 없습니다.</p>
+            <p>CBZ/ZIP 파일을 업로드하면 여기에 표시됩니다.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- PWA Install Prompt -->
+    <script src="/static/pwa-install.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/static/service-worker.js');
+        }
+    </script>
+</body>
+</html>

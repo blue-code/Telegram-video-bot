@@ -2397,19 +2397,19 @@ async def upload_general_file(
             try:
                 # Extract metadata from the temp file we saved earlier
                 epub_meta = await asyncio.to_thread(get_epub_metadata, tmp_path)
-                
+
                 if epub_meta.get('title'):
                     metadata['book_title'] = epub_meta['title']
                 if epub_meta.get('author'):
                     metadata['author'] = epub_meta['author']
-                
+
                 # Upload cover if exists
                 if epub_meta.get('cover_bytes'):
                     cover_ext = epub_meta.get('cover_ext', '.jpg')
                     with tempfile.NamedTemporaryFile(suffix=cover_ext, delete=False) as tmp_cover:
                         tmp_cover.write(epub_meta['cover_bytes'])
                         tmp_cover_path = tmp_cover.name
-                    
+
                     try:
                         async def upload_cover():
                             with open(tmp_cover_path, 'rb') as c:
@@ -2418,7 +2418,7 @@ async def upload_general_file(
                                     photo=c,
                                     caption=f"🖼️ Cover: {file.filename}"
                                 )
-                        
+
                         cover_msg = await send_with_retries(upload_cover, "upload_cover")
                         if cover_msg.photo:
                             metadata['cover_file_id'] = cover_msg.photo[-1].file_id
@@ -2428,27 +2428,127 @@ async def upload_general_file(
             except Exception as e:
                 logger.error(f"Failed to extract EPUB metadata: {e}")
 
+        # Comic Book Metadata Extraction (CBZ/ZIP)
+        is_comic = False
+        comic_metadata = {}
+        if file.filename.lower().endswith(('.cbz', '.zip')):
+            try:
+                logger.info(f"🔍 Checking if ZIP is a comic book: {file.filename}")
+                from src.comic_parser import is_comic_book, extract_comic_metadata
+
+                # Check if it's actually a comic book
+                is_comic_result = await asyncio.to_thread(is_comic_book, tmp_path)
+                logger.info(f"📊 Comic book detection result: {is_comic_result}")
+
+                if is_comic_result:
+                    is_comic = True
+                    logger.info(f"✅ Detected comic book: {file.filename}")
+
+                    # Extract comic metadata with original filename
+                    comic_meta = await asyncio.to_thread(
+                        extract_comic_metadata,
+                        tmp_path,
+                        None,  # folder
+                        file.filename  # original_filename
+                    )
+
+                    if comic_meta.get('title'):
+                        metadata['comic_title'] = comic_meta['title']
+                    if comic_meta.get('series'):
+                        metadata['comic_series'] = comic_meta['series']
+                    if comic_meta.get('volume'):
+                        metadata['comic_volume'] = comic_meta['volume']
+                    if comic_meta.get('page_count'):
+                        metadata['page_count'] = comic_meta['page_count']
+
+                    # Store cover as base64 in metadata for DB caching (JSON serializable)
+                    if comic_meta.get('cover_bytes'):
+                        import base64
+                        cover_bytes = comic_meta['cover_bytes']
+                        metadata['cover_base64'] = base64.b64encode(cover_bytes).decode('utf-8')
+                        metadata['cover_ext'] = comic_meta.get('cover_ext', '.jpg')
+
+                    # Save comic metadata for later DB insertion
+                    comic_metadata = comic_meta
+
+            except Exception as e:
+                logger.error(f"Failed to extract comic metadata: {e}")
+
+        # 만화책인 경우 파일을 영구 저장 (나중에 페이지 이미지 읽기 위해)
+        permanent_path = None
+        if is_comic:
+            # download_cache 디렉토리에 영구 저장
+            import hashlib
+            file_hash = hashlib.md5(f"{user_id}_{file.filename}".encode()).hexdigest()
+            permanent_dir = Path("download_cache") / "comics" / str(user_id)
+            permanent_dir.mkdir(parents=True, exist_ok=True)
+            permanent_path = str(permanent_dir / f"{file_hash}_{file.filename}")
+
+            # 임시 파일을 영구 위치로 복사
+            import shutil
+            shutil.copy2(tmp_path, permanent_path)
+            logger.info(f"📁 Comic saved to: {permanent_path}")
+
         # Cleanup main temp file
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
         # DB Entry
         from src.db import add_file
-        
+
         if len(parts) > 1:
             metadata["parts"] = [{"file_id": fid, "part": i+1} for i, fid in enumerate(file_ids)]
-        
+
         file_data = {
             "user_id": user_id,
             "file_id": file_ids[0], # Master ID
             "file_name": file.filename,
             "file_size": file_size,
             "mime_type": file.content_type,
+            "file_path": permanent_path if is_comic else None,  # 만화책은 파일 경로 저장
             "metadata": metadata if metadata else None
         }
-        
-        await add_file(file_data)
-        
+
+        added_file = await add_file(file_data)
+        logger.info(f"💾 File added to DB: {added_file.get('id') if added_file else 'FAILED'}")
+
+        # If comic book, save to comics table
+        if is_comic and comic_metadata and added_file:
+            try:
+                logger.info(f"💾 Saving comic metadata to comics table...")
+                from src.db import save_comic_metadata
+                import base64
+
+                # Convert thumbnail bytes to base64 string for JSON serialization
+                cover_bytes = comic_metadata.get("cover_bytes")
+                cover_base64 = base64.b64encode(cover_bytes).decode('utf-8') if cover_bytes else None
+
+                comic_db_data = {
+                    "file_id": added_file.get("id"),
+                    "user_id": user_id,
+                    "title": comic_metadata.get("title") or file.filename,
+                    "series": comic_metadata.get("series"),
+                    "volume": comic_metadata.get("volume"),
+                    "folder": comic_metadata.get("folder"),
+                    "page_count": comic_metadata.get("page_count", 0),
+                    "metadata": {
+                        "cover_base64": cover_base64,
+                        "cover_ext": comic_metadata.get("cover_ext")
+                    }
+                }
+
+                logger.info(f"📝 Comic data: title={comic_db_data['title']}, series={comic_db_data['series']}, volume={comic_db_data['volume']}, pages={comic_db_data['page_count']}")
+
+                result = await save_comic_metadata(comic_db_data)
+                logger.info(f"✅ Comic book metadata saved successfully! Result: {result}")
+
+            except Exception as e:
+                logger.error(f"❌ Failed to save comic metadata to DB: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        elif is_comic:
+            logger.warning(f"⚠️ Comic detected but not saved. is_comic={is_comic}, comic_metadata={bool(comic_metadata)}, added_file={bool(added_file)}")
+
         # Notify
         if DEFAULT_USER_ID:
              try:
@@ -2642,9 +2742,17 @@ async def download_file_by_db_id(file_id: int):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/files/{file_id}")
-async def delete_file_api(file_id: int, user_id: Optional[int] = Body(None)):
+async def delete_file_api(file_id: int, user_id: Optional[int] = None, request: Request = None):
     from src.db import delete_file
-    if not user_id: user_id = DEFAULT_USER_ID
+
+    # Try to get user_id from query params or request body
+    if not user_id:
+        try:
+            body = await request.json() if request else {}
+            user_id = body.get('user_id') or DEFAULT_USER_ID
+        except:
+            user_id = DEFAULT_USER_ID
+
     success = await delete_file(file_id, user_id)
     return {"success": success}
 
@@ -3482,5 +3590,459 @@ async def get_tts_voices():
         {"name": "ko-KR-HyunsuMultilingualNeural", "label": "현수 (남성, 다국어)", "gender": "Male"}
     ]
     return {"voices": voices}
+
+
+# ============== COMIC BOOK ROUTES ==============
+
+@app.get("/comics/{user_id}", response_class=HTMLResponse)
+async def comics_page(
+    request: Request,
+    user_id: int,
+    page: int = 1,
+    per_page: int = 24,
+    q: str = "",
+    series: str = None,
+    sort_by: str = "latest"
+):
+    """Comic books library page"""
+    from src.db import get_comics, count_comics
+
+    try:
+        offset = (page - 1) * per_page
+
+        # Get comics with filters
+        comics = await get_comics(
+            user_id=user_id,
+            limit=per_page,
+            offset=offset,
+            query=q if q else None,
+            series=series,
+            sort_by=sort_by
+        )
+
+        # Get total count
+        total_count = await count_comics(
+            user_id=user_id,
+            query=q if q else None,
+            series=series
+        )
+
+        total_pages = (total_count + per_page - 1) // per_page
+
+        # Add cover URL for each comic
+        for comic in comics:
+            file_id = comic.get("file_id")
+            if file_id:
+                comic["cover_url"] = f"/api/comics/thumbnail/{file_id}"
+
+            # Calculate size in MB
+            files_data = comic.get("files")
+            if files_data and files_data.get("file_size"):
+                comic["size_mb"] = f"{files_data['file_size'] / (1024*1024):.1f}"
+
+        return templates.TemplateResponse("comics.html", {
+            "request": request,
+            "user_id": user_id,
+            "comics": comics,
+            "total_count": total_count,
+            "page": page,
+            "total_pages": total_pages,
+            "query": q,
+            "series_filter": series,
+            "sort_by": sort_by
+        })
+
+    except Exception as e:
+        logger.error(f"Error loading comics page: {e}")
+        logger.error(traceback.format_exc())
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load comics"
+        })
+
+
+@app.get("/comics", response_class=HTMLResponse)
+async def comics_default_page(request: Request):
+    """Comics page with default user"""
+    return await comics_page(request, DEFAULT_USER_ID)
+
+
+@app.get("/comic_series/{user_id}", response_class=HTMLResponse)
+async def comic_series_list_page(
+    request: Request,
+    user_id: int
+):
+    """List all comic series"""
+    from src.db import get_comic_series
+
+    try:
+        series_list = await get_comic_series(user_id)
+
+        # Add cover URL for each series (use first comic's cover)
+        for series in series_list:
+            first_file_id = series.get("first_file_id")
+            if first_file_id:
+                series["cover_url"] = f"/api/comics/thumbnail/{first_file_id}"
+
+        return templates.TemplateResponse("comic_series_list.html", {
+            "request": request,
+            "user_id": user_id,
+            "series_list": series_list
+        })
+
+    except Exception as e:
+        logger.error(f"Error loading comic series: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load comic series"
+        })
+
+
+@app.get("/comic_series/{user_id}/{series_name}", response_class=HTMLResponse)
+async def comic_series_detail_page(
+    request: Request,
+    user_id: int,
+    series_name: str
+):
+    """Comic series detail page showing all volumes"""
+    from src.db import get_comics_by_series
+    from urllib.parse import unquote
+
+    try:
+        # URL decode series name
+        series_name_decoded = unquote(series_name)
+
+        # Get all comics in this series
+        comics = await get_comics_by_series(
+            user_id=user_id,
+            series_name=series_name_decoded
+        )
+
+        # Add cover URL for each comic
+        for comic in comics:
+            file_id = comic.get("file_id")
+            if file_id:
+                comic["cover_url"] = f"/api/comics/thumbnail/{file_id}"
+
+            # Calculate size
+            files_data = comic.get("files")
+            if files_data and files_data.get("file_size"):
+                comic["size_mb"] = f"{files_data['file_size'] / (1024*1024):.1f}"
+
+        return templates.TemplateResponse("comic_series.html", {
+            "request": request,
+            "user_id": user_id,
+            "series_name": series_name_decoded,
+            "comics": comics,
+            "total_count": len(comics)
+        })
+
+    except Exception as e:
+        logger.error(f"Error loading series detail: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load series"
+        })
+
+
+@app.get("/comic_reader/{file_id}", response_class=HTMLResponse)
+async def comic_reader_page(
+    request: Request,
+    file_id: int,
+    user_id: int = DEFAULT_USER_ID
+):
+    """Comic book reader page"""
+    from src.db import get_file_by_id, get_comic_by_file_id, get_comic_progress
+
+    try:
+        # Get file info
+        file_data = await get_file_by_id(file_id)
+        if not file_data:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Get comic metadata
+        comic = await get_comic_by_file_id(file_id)
+        if not comic:
+            raise HTTPException(status_code=404, detail="Comic not found")
+
+        # Get reading progress
+        progress = await get_comic_progress(user_id, file_id)
+        current_page = 0
+        settings = {"reading_direction": "ltr", "mode": "comic"}
+
+        if progress:
+            current_page = progress.get("current_page", 0)
+            if progress.get("settings"):
+                settings.update(progress["settings"])
+
+        return templates.TemplateResponse("comic_reader.html", {
+            "request": request,
+            "file_id": file_id,
+            "user_id": user_id,
+            "title": comic.get("title") or file_data.get("file_name"),
+            "page_count": comic.get("page_count", 0),
+            "current_page": current_page,
+            "settings": json.dumps(settings)
+        })
+
+    except Exception as e:
+        logger.error(f"Error loading comic reader: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load reader"
+        })
+
+
+@app.get("/api/comics/thumbnail/{file_id}")
+async def get_comic_thumbnail(file_id: int):
+    """Get comic book thumbnail (first page)"""
+    from src.db import get_file_by_id, get_comic_by_file_id
+    from src.comic_parser import extract_cover_image
+    import io
+    import base64
+
+    try:
+        # Get file info
+        file_data = await get_file_by_id(file_id)
+        if not file_data:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Check if we have cached cover
+        comic = await get_comic_by_file_id(file_id)
+        if comic and comic.get("metadata"):
+            # Check for base64 encoded cover (new format)
+            cover_base64 = comic["metadata"].get("cover_base64")
+            if cover_base64:
+                cover_bytes = base64.b64decode(cover_base64)
+                return Response(
+                    content=cover_bytes,
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"}
+                )
+
+            # Legacy: check for raw bytes (old format)
+            cover_bytes_legacy = comic["metadata"].get("cover_bytes")
+            if cover_bytes_legacy:
+                return Response(
+                    content=cover_bytes_legacy,
+                    media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"}
+                )
+
+        # Extract cover from file
+        file_path = file_data.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found on disk")
+
+        cover_bytes, cover_ext = extract_cover_image(file_path)
+
+        if not cover_bytes:
+            raise HTTPException(status_code=404, detail="No cover image found")
+
+        # Cache the cover in database (as base64)
+        if comic:
+            from src.db import save_comic_metadata
+            metadata = comic.get("metadata") or {}
+            metadata["cover_base64"] = base64.b64encode(cover_bytes).decode('utf-8')
+            metadata["cover_ext"] = cover_ext
+
+            comic["metadata"] = metadata
+            await save_comic_metadata(comic)
+
+        return Response(
+            content=cover_bytes,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting thumbnail: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/comics/page/{file_id}/{page_num}")
+async def get_comic_page(file_id: int, page_num: int):
+    """Get specific page image from comic book"""
+    from src.db import get_file_by_id
+    from src.comic_parser import get_page_image
+
+    try:
+        # Get file info
+        file_data = await get_file_by_id(file_id)
+        if not file_data:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        file_path = file_data.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found on disk")
+
+        # Get page image
+        image_bytes, mime_type = get_page_image(file_path, page_num)
+
+        if not image_bytes:
+            raise HTTPException(status_code=404, detail="Page not found")
+
+        return Response(
+            content=image_bytes,
+            media_type=mime_type,
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting page {page_num}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/comics/info/{file_id}")
+async def get_comic_info(file_id: int):
+    """Get comic book metadata"""
+    from src.db import get_file_by_id, get_comic_by_file_id
+
+    try:
+        comic = await get_comic_by_file_id(file_id)
+        if not comic:
+            raise HTTPException(status_code=404, detail="Comic not found")
+
+        return {
+            "success": True,
+            "data": {
+                "title": comic.get("title"),
+                "series": comic.get("series"),
+                "volume": comic.get("volume"),
+                "page_count": comic.get("page_count"),
+                "cover_url": f"/api/comics/thumbnail/{file_id}"
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting comic info: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/comics/progress")
+async def save_comic_progress_api(
+    file_id: int = Body(...),
+    user_id: int = Body(...),
+    current_page: int = Body(...),
+    settings: dict = Body(None)
+):
+    """Save comic reading progress"""
+    from src.db import save_comic_progress
+
+    try:
+        await save_comic_progress(user_id, file_id, current_page, settings)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Save comic progress error: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.get("/api/comics/progress/{file_id}")
+async def get_comic_progress_api(file_id: int, user_id: int = DEFAULT_USER_ID):
+    """Get comic reading progress"""
+    from src.db import get_comic_progress
+
+    try:
+        progress = await get_comic_progress(user_id, file_id)
+        return {"success": True, "data": progress}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@app.get("/api/comics/series/{user_id}/{series_name}")
+async def get_series_comics_api(user_id: int, series_name: str):
+    """Get all comics in a series (JSON API)"""
+    from src.db import get_comics_by_series
+    from urllib.parse import unquote
+
+    try:
+        series_name_decoded = unquote(series_name)
+        comics = await get_comics_by_series(user_id, series_name_decoded)
+
+        return {
+            "success": True,
+            "comics": comics
+        }
+    except Exception as e:
+        logger.error(f"Error getting series comics: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.get("/api/comics/download/{file_id}")
+async def download_comic(file_id: int, user_id: int = DEFAULT_USER_ID):
+    """Download comic book file"""
+    from src.db import get_file_by_id
+
+    try:
+        file_data = await get_file_by_id(file_id)
+        if not file_data:
+            raise HTTPException(status_code=404, detail="File not found")
+
+        file_path = file_data.get("file_path")
+        if not file_path or not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="File not found on disk")
+
+        file_name = file_data.get("file_name")
+
+        return FileResponse(
+            path=file_path,
+            filename=file_name,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{file_name}"'
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error downloading comic: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/comics/favorite/{file_id}")
+async def get_favorite_status(file_id: int, user_id: int = DEFAULT_USER_ID):
+    """Check if comic is favorited"""
+    from src.db import is_comic_favorite
+
+    try:
+        is_favorite = await is_comic_favorite(user_id, file_id)
+        return {"success": True, "is_favorite": is_favorite}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/comics/favorite")
+async def add_comic_favorite(
+    file_id: int = Body(...),
+    user_id: int = Body(...)
+):
+    """Add comic to favorites"""
+    from src.db import add_comic_favorite
+
+    try:
+        await add_comic_favorite(user_id, file_id)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Error adding favorite: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/comics/unfavorite")
+async def remove_comic_favorite(
+    file_id: int = Body(...),
+    user_id: int = Body(...)
+):
+    """Remove comic from favorites"""
+    from src.db import remove_comic_favorite
+
+    try:
+        await remove_comic_favorite(user_id, file_id)
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"Error removing favorite: {e}")
+        return {"success": False, "message": str(e)}
 
 

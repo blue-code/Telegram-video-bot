@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <title>{{ title }} - 만화책 뷰어</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#1a1a1a">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #1a1a1a;
+            color: #ccc;
+            font-family: sans-serif;
+            height: 100vh;
+            width: 100vw;
+            position: relative;
+        }
+
+        /* Comic Mode (Page-based) */
+        #viewer.comic-mode {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #viewer.comic-mode #page-image {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: opacity 0.3s;
+        }
+
+        /* Webtoon Mode (Scroll-based) */
+        #viewer.webtoon-mode {
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            overflow-x: hidden;
+            background: #000;
+            position: relative;
+            scroll-behavior: smooth;
+        }
+
+        #webtoon-container {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            padding: 0;
+            min-height: 100%;
+        }
+
+        #viewer.webtoon-mode #webtoon-container {
+            display: flex;
+        }
+
+        .webtoon-page {
+            width: 100%;
+            max-width: 100%;
+            display: block;
+            margin: 0;
+        }
+
+        .webtoon-page img {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .webtoon-loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        /* Page Image (Comic Mode only) */
+        #page-image {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+            transition: opacity 0.3s;
+            display: block;
+        }
+
+        #viewer.webtoon-mode #page-image {
+            display: none;
+        }
+
+        .loading {
+            opacity: 0.5;
+        }
+
+        /* Loading Spinner */
+        #loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 10;
+            pointer-events: none;
+            display: none;
+        }
+        .spinner {
+            border: 4px solid rgba(255,255,255,0.1);
+            border-left-color: #667eea;
+            border-radius: 50%;
+            width: 40px; height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Touch Zones (Comic Mode only) */
+        .touch-zone {
+            position: absolute;
+            top: 0; bottom: 0;
+            z-index: 5;
+            display: block;
+        }
+
+        #viewer.webtoon-mode .touch-zone {
+            display: none;
+        }
+
+        #prev-zone { left: 0; width: 30%; }
+        #next-zone { right: 0; width: 30%; }
+        #menu-zone { left: 30%; width: 40%; }
+
+        /* Double-tap overlay */
+        .double-tap-overlay {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(102, 126, 234, 0.9);
+            color: #fff;
+            padding: 20px 40px;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: 600;
+            display: none;
+            z-index: 100;
+        }
+
+        /* Top Controls */
+        #controls {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            background: rgba(0,0,0,0.9);
+            padding: 15px;
+            transform: translateY(-100%);
+            transition: transform 0.3s;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        #controls.active {
+            transform: translateY(0);
+        }
+
+        .back-btn {
+            background: none; border: none; color: #fff; font-size: 18px; cursor: pointer;
+            text-decoration: none; display: flex; align-items: center; gap: 5px;
+        }
+
+        .title-text {
+            font-size: 14px; font-weight: 600; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap;
+            flex: 1; text-align: center;
+        }
+
+        .settings-btn {
+            background: none; border: none; color: #fff; font-size: 18px; cursor: pointer;
+        }
+
+        .download-btn {
+            background: none; border: none; color: #fff; font-size: 18px; cursor: pointer;
+            margin-right: 10px;
+        }
+
+        .favorite-btn {
+            background: none; border: none; color: #fff; font-size: 18px; cursor: pointer;
+            margin-right: 10px;
+        }
+
+        .favorite-btn.active {
+            color: #f59e0b;
+        }
+
+        /* Bottom Settings Panel */
+        .settings-panel {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            background: rgba(0,0,0,0.95);
+            padding: 20px;
+            transform: translateY(100%);
+            transition: transform 0.3s;
+            z-index: 20;
+            border-top: 1px solid #333;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .settings-panel.active {
+            transform: translateY(0);
+        }
+
+        .setting-group { margin-bottom: 15px; }
+        .setting-label {
+            font-size: 12px; color: #888; margin-bottom: 8px;
+            display: block;
+        }
+
+        .option-buttons {
+            display: flex; gap: 10px;
+        }
+        .option-btn {
+            flex: 1; padding: 10px; border: 1px solid #444;
+            border-radius: 6px; cursor: pointer; text-align: center;
+            font-size: 14px; background: #222; color: #fff;
+            transition: all 0.3s;
+        }
+        .option-btn.active {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.2);
+        }
+
+        /* Progress Bar */
+        #progress-bar-container {
+            position: fixed;
+            bottom: 0; left: 0; right: 0;
+            height: 4px;
+            background: rgba(255,255,255,0.1);
+            z-index: 10;
+        }
+        #progress-bar {
+            height: 100%;
+            background: #667eea;
+            width: 0%;
+            transition: width 0.2s;
+        }
+
+        /* Page Info */
+        #page-info {
+            position: fixed;
+            bottom: 10px; right: 10px;
+            font-size: 12px; color: #888;
+            pointer-events: none; z-index: 5;
+            background: rgba(0,0,0,0.5);
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+
+        /* Pinch Zoom Support */
+        #viewer.zoomed #page-image {
+            cursor: move;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <div class="spinner"></div>
+    </div>
+
+    <!-- Viewer Container -->
+    <div id="viewer" class="comic-mode">
+        <!-- Comic Mode: Single Page -->
+        <img id="page-image" src="" alt="Comic Page">
+
+        <!-- Webtoon Mode: Scrollable Pages -->
+        <div id="webtoon-container">
+            <!-- Pages will be dynamically loaded here -->
+        </div>
+    </div>
+
+    <!-- Touch Zones (Comic Mode only) -->
+    <div id="prev-zone" class="touch-zone"></div>
+    <div id="menu-zone" class="touch-zone"></div>
+    <div id="next-zone" class="touch-zone"></div>
+
+    <!-- Double-tap overlay -->
+    <div class="double-tap-overlay" id="double-tap-message">다음 만화책으로 이동</div>
+
+    <!-- Top Controls -->
+    <div id="controls">
+        <a href="/comics/{{ user_id }}" class="back-btn">← 뒤로</a>
+        <span class="title-text">{{ title }}</span>
+        <button class="favorite-btn" onclick="toggleFavorite()" id="favorite-btn" title="즐겨찾기">
+            ☆
+        </button>
+        <button class="download-btn" onclick="downloadComic()" title="다운로드">
+            ⬇️
+        </button>
+        <button class="settings-btn" onclick="toggleSettings()">⚙️</button>
+    </div>
+
+    <!-- Bottom Settings -->
+    <div class="settings-panel" id="settings">
+        <div class="setting-group">
+            <span class="setting-label">읽기 방향 (만화책 모드)</span>
+            <div class="option-buttons">
+                <div class="option-btn" onclick="setReadingDirection('ltr')" id="dir-ltr">
+                    일반 (왼쪽→오른쪽)
+                </div>
+                <div class="option-btn" onclick="setReadingDirection('rtl')" id="dir-rtl">
+                    일본식 (오른쪽→왼쪽)
+                </div>
+            </div>
+        </div>
+        <div class="setting-group">
+            <span class="setting-label">보기 모드</span>
+            <div class="option-buttons">
+                <div class="option-btn active" onclick="setMode('comic')" id="mode-comic">
+                    만화책 (페이지)
+                </div>
+                <div class="option-btn" onclick="setMode('webtoon')" id="mode-webtoon">
+                    웹툰 (스크롤)
+                </div>
+            </div>
+        </div>
+        <div class="setting-group">
+            <span class="setting-label">이중 페이지 자동 분할 (세로 화면)</span>
+            <div class="option-buttons">
+                <div class="option-btn active" onclick="setAutoSplit(true)" id="split-on">
+                    켜기 (권장)
+                </div>
+                <div class="option-btn" onclick="setAutoSplit(false)" id="split-off">
+                    끄기
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="progress-bar-container"><div id="progress-bar"></div></div>
+    <div id="page-info"></div>
+
+    <script>
+        const fileId = {{ file_id }};
+        const userId = {{ user_id }};
+        const pageCount = {{ page_count }};
+        const settingsData = {{ settings|safe }};
+
+        let currentPage = {{ current_page }};
+        let readingDirection = settingsData.reading_direction || 'ltr';
+        let mode = settingsData.mode || 'comic';
+        let autoSplitEnabled = settingsData.auto_split !== false; // 기본값: true
+        let isFavorite = false;
+
+        const pageImg = document.getElementById('page-image');
+        const loading = document.getElementById('loading');
+        const progressBar = document.getElementById('progress-bar');
+        const pageInfo = document.getElementById('page-info');
+        const viewer = document.getElementById('viewer');
+        const webtoonContainer = document.getElementById('webtoon-container');
+
+        // Webtoon mode variables
+        let webtoonLoadedPages = [];
+        let webtoonLoading = false;
+        let webtoonCurrentPage = 0;
+
+        // Double-page spread variables
+        let isDoublePage = false;
+        let currentSplit = 0; // 0: left/first, 1: right/second
+        let splitImages = { left: null, right: null };
+        let originalImageData = null;
+
+        // Initialize
+        if (mode === 'webtoon') {
+            initWebtoonMode();
+        } else {
+            loadPage(currentPage);
+        }
+        applySettings();
+        loadFavoriteStatus();
+
+        // Navigation (Comic Mode)
+        document.getElementById('prev-zone').addEventListener('click', prevPage);
+        document.getElementById('next-zone').addEventListener('click', nextPage);
+        document.getElementById('menu-zone').addEventListener('click', toggleMenu);
+
+        // Double-tap to next comic
+        let lastTap = 0;
+        document.getElementById('menu-zone').addEventListener('dblclick', () => {
+            navigateToNextComic();
+        });
+
+        // Keyboard support
+        document.addEventListener('keyup', (e) => {
+            if (mode === 'comic') {
+                if (e.key === 'ArrowLeft') {
+                    if (readingDirection === 'rtl') nextPage();
+                    else prevPage();
+                }
+                if (e.key === 'ArrowRight') {
+                    if (readingDirection === 'rtl') prevPage();
+                    else nextPage();
+                }
+            }
+        });
+
+        // ========== COMIC MODE FUNCTIONS ==========
+
+        function loadPage(pageNum, forceSplit = null) {
+            if (pageNum < 0 || pageNum >= pageCount) return;
+
+            loading.style.display = 'block';
+            pageImg.classList.add('loading');
+
+            const pageUrl = `/api/comics/page/${fileId}/${pageNum}`;
+
+            fetch(pageUrl)
+                .then(response => {
+                    if (!response.ok) throw new Error('Failed to load page');
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const img = new Image();
+
+                    img.onload = () => {
+                        // 이미지 가로세로 비율 확인
+                        const imgRatio = img.width / img.height;
+                        const isLandscape = imgRatio > 1.5; // 가로가 세로의 1.5배 이상이면 이중 페이지
+
+                        // 화면 방향 확인
+                        const viewportRatio = window.innerWidth / window.innerHeight;
+                        const isPortraitScreen = viewportRatio < 1;
+
+                        // 이중 페이지 판단: 이미지가 가로형 && 화면이 세로형 && 자동 분할 활성화
+                        isDoublePage = autoSplitEnabled && isLandscape && isPortraitScreen;
+
+                        if (isDoublePage) {
+                            // 이미지를 반으로 나누기
+                            splitDoublePage(img, url);
+
+                            // forceSplit이 명시되지 않았으면 읽기 방향에 따라 결정
+                            if (forceSplit === null) {
+                                currentSplit = (readingDirection === 'rtl') ? 1 : 0;
+                            } else {
+                                currentSplit = forceSplit;
+                            }
+
+                            // 해당 분할 페이지 표시
+                            displaySplitPage();
+                        } else {
+                            // 일반 페이지 표시
+                            isDoublePage = false;
+                            currentSplit = 0;
+                            pageImg.src = url;
+                            pageImg.onload = () => {
+                                loading.style.display = 'none';
+                                pageImg.classList.remove('loading');
+                            };
+                        }
+
+                        currentPage = pageNum;
+                        updateProgress();
+                        saveProgress();
+                    };
+
+                    img.src = url;
+                    originalImageData = url;
+                })
+                .catch(err => {
+                    console.error('Error loading page:', err);
+                    loading.style.display = 'none';
+                    pageImg.classList.remove('loading');
+                });
+        }
+
+        function splitDoublePage(img, originalUrl) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+
+            const halfWidth = img.width / 2;
+            canvas.width = halfWidth;
+            canvas.height = img.height;
+
+            // 왼쪽 페이지
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0, halfWidth, img.height, 0, 0, halfWidth, img.height);
+            splitImages.left = canvas.toDataURL();
+
+            // 오른쪽 페이지
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, halfWidth, 0, halfWidth, img.height, 0, 0, halfWidth, img.height);
+            splitImages.right = canvas.toDataURL();
+
+            console.log('Double-page spread detected and split');
+        }
+
+        function displaySplitPage() {
+            const splitUrl = (currentSplit === 0) ? splitImages.left : splitImages.right;
+            pageImg.src = splitUrl;
+            pageImg.onload = () => {
+                loading.style.display = 'none';
+                pageImg.classList.remove('loading');
+            };
+
+            // 페이지 정보 업데이트
+            updatePageInfo();
+        }
+
+        function updatePageInfo() {
+            if (isDoublePage) {
+                const side = (readingDirection === 'rtl')
+                    ? (currentSplit === 1 ? '우' : '좌')
+                    : (currentSplit === 0 ? '좌' : '우');
+                pageInfo.textContent = `${currentPage + 1}/${pageCount} (${side})`;
+            } else {
+                pageInfo.textContent = `${currentPage + 1} / ${pageCount}`;
+            }
+        }
+
+        function prevPage() {
+            // 이중 페이지 처리
+            if (isDoublePage) {
+                if (readingDirection === 'rtl') {
+                    // RTL: 오른쪽→왼쪽 순서
+                    if (currentSplit === 1) {
+                        // 오른쪽 페이지 → 왼쪽 페이지로
+                        currentSplit = 0;
+                        displaySplitPage();
+                        return;
+                    }
+                    // 왼쪽 페이지 → 다음 실제 페이지로
+                } else {
+                    // LTR: 왼쪽→오른쪽 순서
+                    if (currentSplit === 1) {
+                        // 오른쪽 페이지 → 왼쪽 페이지로
+                        currentSplit = 0;
+                        displaySplitPage();
+                        return;
+                    }
+                    // 왼쪽 페이지 → 이전 실제 페이지로
+                }
+            }
+
+            // 실제 페이지 이동
+            if (readingDirection === 'rtl') {
+                // RTL: right = prev
+                if (currentPage < pageCount - 1) {
+                    loadPage(currentPage + 1);
+                }
+            } else {
+                // LTR: left = prev
+                if (currentPage > 0) {
+                    loadPage(currentPage - 1);
+                } else {
+                    // At first page, try to go to previous comic
+                    navigateToPreviousComic();
+                }
+            }
+        }
+
+        function nextPage() {
+            // 이중 페이지 처리
+            if (isDoublePage) {
+                if (readingDirection === 'rtl') {
+                    // RTL: 오른쪽→왼쪽 순서
+                    if (currentSplit === 1) {
+                        // 오른쪽 페이지 → 왼쪽 페이지로
+                        currentSplit = 0;
+                        displaySplitPage();
+                        return;
+                    }
+                    // 왼쪽 페이지 → 이전 실제 페이지로 (RTL이므로)
+                } else {
+                    // LTR: 왼쪽→오른쪽 순서
+                    if (currentSplit === 0) {
+                        // 왼쪽 페이지 → 오른쪽 페이지로
+                        currentSplit = 1;
+                        displaySplitPage();
+                        return;
+                    }
+                    // 오른쪽 페이지 → 다음 실제 페이지로
+                }
+            }
+
+            // 실제 페이지 이동
+            if (readingDirection === 'rtl') {
+                // RTL: left = next
+                if (currentPage > 0) {
+                    loadPage(currentPage - 1);
+                } else {
+                    // At last page (in RTL, page 0), try to go to next comic
+                    navigateToNextComic();
+                }
+            } else {
+                // LTR: right = next
+                if (currentPage < pageCount - 1) {
+                    loadPage(currentPage + 1);
+                } else {
+                    // At last page, try to go to next comic
+                    navigateToNextComic();
+                }
+            }
+        }
+
+        // ========== WEBTOON MODE FUNCTIONS ==========
+
+        function initWebtoonMode() {
+            webtoonContainer.innerHTML = '';
+            webtoonLoadedPages = [];
+            webtoonCurrentPage = currentPage;
+
+            // Load initial batch of pages
+            loadWebtoonPages(currentPage, Math.min(currentPage + 5, pageCount));
+
+            // Setup infinite scroll
+            viewer.addEventListener('scroll', handleWebtoonScroll);
+        }
+
+        function loadWebtoonPages(startPage, endPage) {
+            if (webtoonLoading) return;
+
+            webtoonLoading = true;
+
+            for (let i = startPage; i < endPage; i++) {
+                if (webtoonLoadedPages.includes(i)) continue;
+
+                const pageDiv = document.createElement('div');
+                pageDiv.className = 'webtoon-page';
+                pageDiv.dataset.page = i;
+
+                const img = document.createElement('img');
+                img.dataset.src = `/api/comics/page/${fileId}/${i}`;
+                img.alt = `Page ${i + 1}`;
+                img.loading = 'lazy';
+
+                // Use Intersection Observer for lazy loading
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            const img = entry.target;
+                            img.src = img.dataset.src;
+                            observer.unobserve(img);
+                        }
+                    });
+                });
+
+                observer.observe(img);
+
+                pageDiv.appendChild(img);
+                webtoonContainer.appendChild(pageDiv);
+
+                webtoonLoadedPages.push(i);
+            }
+
+            // Add loading indicator at the end if more pages exist
+            if (endPage < pageCount) {
+                const loadingDiv = document.createElement('div');
+                loadingDiv.className = 'webtoon-loading';
+                loadingDiv.id = 'webtoon-end-loading';
+                loadingDiv.textContent = '페이지 로딩 중...';
+                webtoonContainer.appendChild(loadingDiv);
+            } else {
+                // End of comic - show next comic button
+                const endDiv = document.createElement('div');
+                endDiv.className = 'webtoon-loading';
+                endDiv.innerHTML = '<button onclick="navigateToNextComic()" style="padding: 15px 30px; background: #667eea; color: #fff; border: none; border-radius: 8px; font-size: 16px; cursor: pointer;">다음 만화책 →</button>';
+                webtoonContainer.appendChild(endDiv);
+            }
+
+            webtoonLoading = false;
+        }
+
+        function handleWebtoonScroll() {
+            const scrollTop = viewer.scrollTop;
+            const scrollHeight = viewer.scrollHeight;
+            const clientHeight = viewer.clientHeight;
+
+            // Update current page based on scroll position
+            const pages = document.querySelectorAll('.webtoon-page');
+            pages.forEach((page, index) => {
+                const rect = page.getBoundingClientRect();
+                if (rect.top <= clientHeight / 2 && rect.bottom >= clientHeight / 2) {
+                    webtoonCurrentPage = parseInt(page.dataset.page);
+                }
+            });
+
+            currentPage = webtoonCurrentPage;
+            updateProgress();
+
+            // Save progress periodically
+            clearTimeout(window.webtoonScrollTimeout);
+            window.webtoonScrollTimeout = setTimeout(() => {
+                saveProgress();
+            }, 1000);
+
+            // Load more pages when near bottom
+            if (scrollHeight - scrollTop - clientHeight < 1000) {
+                const lastLoadedPage = Math.max(...webtoonLoadedPages);
+                if (lastLoadedPage < pageCount - 1 && !webtoonLoading) {
+                    // Remove loading indicator
+                    const loadingDiv = document.getElementById('webtoon-end-loading');
+                    if (loadingDiv) loadingDiv.remove();
+
+                    // Load next batch
+                    loadWebtoonPages(lastLoadedPage + 1, Math.min(lastLoadedPage + 6, pageCount));
+                }
+            }
+        }
+
+        // ========== NAVIGATION FUNCTIONS ==========
+
+        async function navigateToNextComic() {
+            showDoubleTapMessage('다음 만화책으로 이동 중...');
+
+            try {
+                // Get current comic info
+                const response = await fetch(`/api/comics/info/${fileId}`);
+                const data = await response.json();
+
+                if (!data.success) {
+                    showDoubleTapMessage('만화책 정보를 불러올 수 없습니다');
+                    return;
+                }
+
+                const currentSeries = data.data.series;
+                const currentVolume = data.data.volume;
+
+                if (!currentSeries || !currentVolume) {
+                    showDoubleTapMessage('다음 만화책을 찾을 수 없습니다');
+                    return;
+                }
+
+                // Find next volume in series
+                const seriesResponse = await fetch(`/api/comics/series/${userId}/${encodeURIComponent(currentSeries)}`);
+                const seriesData = await seriesResponse.json();
+
+                if (!seriesData.success) {
+                    showDoubleTapMessage('시리즈 정보를 불러올 수 없습니다');
+                    return;
+                }
+
+                // Find next volume
+                const comics = seriesData.comics;
+                const nextComic = comics.find(c => c.volume === currentVolume + 1);
+
+                if (nextComic) {
+                    window.location.href = `/comic_reader/${nextComic.file_id}?user_id=${userId}`;
+                } else {
+                    showDoubleTapMessage('마지막 권입니다');
+                }
+
+            } catch (error) {
+                console.error('Error navigating to next comic:', error);
+                showDoubleTapMessage('오류가 발생했습니다');
+            }
+        }
+
+        async function navigateToPreviousComic() {
+            try {
+                const response = await fetch(`/api/comics/info/${fileId}`);
+                const data = await response.json();
+
+                if (!data.success) return;
+
+                const currentSeries = data.data.series;
+                const currentVolume = data.data.volume;
+
+                if (!currentSeries || !currentVolume || currentVolume <= 1) return;
+
+                const seriesResponse = await fetch(`/api/comics/series/${userId}/${encodeURIComponent(currentSeries)}`);
+                const seriesData = await seriesResponse.json();
+
+                if (!seriesData.success) return;
+
+                const comics = seriesData.comics;
+                const prevComic = comics.find(c => c.volume === currentVolume - 1);
+
+                if (prevComic) {
+                    window.location.href = `/comic_reader/${prevComic.file_id}?user_id=${userId}`;
+                }
+            } catch (error) {
+                console.error('Error navigating to previous comic:', error);
+            }
+        }
+
+        // ========== UI FUNCTIONS ==========
+
+        function updateProgress() {
+            const percent = pageCount > 0 ? (currentPage / (pageCount - 1)) * 100 : 0;
+            progressBar.style.width = percent + '%';
+            updatePageInfo();
+        }
+
+        // 화면 방향 변경 감지
+        window.addEventListener('resize', handleOrientationChange);
+        window.addEventListener('orientationchange', handleOrientationChange);
+
+        function handleOrientationChange() {
+            // 만화책 모드이고 페이지가 로드된 경우에만 재평가
+            if (mode === 'comic' && originalImageData) {
+                // 현재 페이지 다시 로드하여 이중 페이지 여부 재판단
+                const savedPage = currentPage;
+                const savedSplit = currentSplit;
+
+                setTimeout(() => {
+                    loadPage(savedPage, isDoublePage ? savedSplit : null);
+                }, 300); // 화면 전환 애니메이션 대기
+            }
+        }
+
+        function saveProgress() {
+            fetch('/api/comics/progress', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    user_id: userId,
+                    file_id: fileId,
+                    current_page: currentPage,
+                    settings: {
+                        reading_direction: readingDirection,
+                        mode: mode,
+                        auto_split: autoSplitEnabled
+                    }
+                })
+            }).then(res => res.json())
+              .then(data => {
+                  if (data.success) {
+                      console.log('Progress saved');
+                  }
+              })
+              .catch(err => console.error('Failed to save progress', err));
+        }
+
+        function toggleMenu() {
+            const controls = document.getElementById('controls');
+            const settings = document.getElementById('settings');
+
+            if (controls.classList.contains('active')) {
+                controls.classList.remove('active');
+                settings.classList.remove('active');
+            } else {
+                controls.classList.add('active');
+                settings.classList.add('active');
+            }
+        }
+
+        function toggleSettings() {
+            document.getElementById('settings').classList.toggle('active');
+        }
+
+        function setReadingDirection(dir) {
+            readingDirection = dir;
+            document.querySelectorAll('[id^="dir-"]').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('dir-' + dir).classList.add('active');
+            saveProgress();
+
+            // Swap touch zones for RTL
+            if (dir === 'rtl') {
+                document.getElementById('prev-zone').style.left = 'auto';
+                document.getElementById('prev-zone').style.right = '0';
+                document.getElementById('next-zone').style.right = 'auto';
+                document.getElementById('next-zone').style.left = '0';
+            } else {
+                document.getElementById('prev-zone').style.left = '0';
+                document.getElementById('prev-zone').style.right = 'auto';
+                document.getElementById('next-zone').style.left = 'auto';
+                document.getElementById('next-zone').style.right = '0';
+            }
+        }
+
+        function setMode(newMode) {
+            mode = newMode;
+            document.querySelectorAll('[id^="mode-"]').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('mode-' + newMode).classList.add('active');
+            saveProgress();
+
+            if (newMode === 'webtoon') {
+                viewer.classList.remove('comic-mode');
+                viewer.classList.add('webtoon-mode');
+                initWebtoonMode();
+            } else {
+                viewer.classList.remove('webtoon-mode');
+                viewer.classList.add('comic-mode');
+                loadPage(currentPage);
+            }
+        }
+
+        function applySettings() {
+            setReadingDirection(readingDirection);
+            document.querySelectorAll('[id^="mode-"]').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('mode-' + mode).classList.add('active');
+
+            // 자동 분할 설정 적용
+            document.querySelectorAll('[id^="split-"]').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('split-' + (autoSplitEnabled ? 'on' : 'off')).classList.add('active');
+
+            if (mode === 'webtoon') {
+                viewer.classList.remove('comic-mode');
+                viewer.classList.add('webtoon-mode');
+            }
+        }
+
+        function setAutoSplit(enabled) {
+            autoSplitEnabled = enabled;
+            document.querySelectorAll('[id^="split-"]').forEach(btn => btn.classList.remove('active'));
+            document.getElementById('split-' + (enabled ? 'on' : 'off')).classList.add('active');
+            saveProgress();
+
+            // 현재 페이지 다시 로드
+            if (mode === 'comic') {
+                loadPage(currentPage);
+            }
+        }
+
+        function showDoubleTapMessage(message = '다음 만화책으로 이동') {
+            const msg = document.getElementById('double-tap-message');
+            msg.textContent = message;
+            msg.style.display = 'block';
+            setTimeout(() => {
+                msg.style.display = 'none';
+            }, 1500);
+        }
+
+        // ========== FAVORITE FUNCTIONS ==========
+
+        async function loadFavoriteStatus() {
+            try {
+                const response = await fetch(`/api/comics/favorite/${fileId}?user_id=${userId}`);
+                const data = await response.json();
+                if (data.success && data.is_favorite) {
+                    isFavorite = true;
+                    document.getElementById('favorite-btn').textContent = '★';
+                    document.getElementById('favorite-btn').classList.add('active');
+                }
+            } catch (error) {
+                console.error('Error loading favorite status:', error);
+            }
+        }
+
+        async function toggleFavorite() {
+            try {
+                const url = isFavorite ? '/api/comics/unfavorite' : '/api/comics/favorite';
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        user_id: userId,
+                        file_id: fileId
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    isFavorite = !isFavorite;
+                    const btn = document.getElementById('favorite-btn');
+                    btn.textContent = isFavorite ? '★' : '☆';
+                    if (isFavorite) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+            } catch (error) {
+                console.error('Error toggling favorite:', error);
+            }
+        }
+
+        // ========== DOWNLOAD FUNCTION ==========
+
+        function downloadComic() {
+            const downloadUrl = `/api/comics/download/${fileId}?user_id=${userId}`;
+            window.location.href = downloadUrl;
+        }
+
+        // Pinch to zoom support (basic) for Comic Mode
+        let scale = 1;
+        let lastDistance = 0;
+
+        pageImg.addEventListener('touchstart', handleTouchStart, {passive: true});
+        pageImg.addEventListener('touchmove', handleTouchMove, {passive: false});
+
+        function handleTouchStart(e) {
+            if (e.touches.length === 2 && mode === 'comic') {
+                lastDistance = getDistance(e.touches[0], e.touches[1]);
+            }
+        }
+
+        function handleTouchMove(e) {
+            if (e.touches.length === 2 && mode === 'comic') {
+                e.preventDefault();
+                const distance = getDistance(e.touches[0], e.touches[1]);
+                const delta = distance - lastDistance;
+
+                scale += delta * 0.01;
+                scale = Math.min(Math.max(scale, 1), 5);
+
+                pageImg.style.transform = `scale(${scale})`;
+                lastDistance = distance;
+
+                if (scale > 1) {
+                    viewer.classList.add('zoomed');
+                } else {
+                    viewer.classList.remove('zoomed');
+                }
+            }
+        }
+
+        function getDistance(touch1, touch2) {
+            const dx = touch1.clientX - touch2.clientX;
+            const dy = touch1.clientY - touch2.clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+    </script>
+</body>
+</html>

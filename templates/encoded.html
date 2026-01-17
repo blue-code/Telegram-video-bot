@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="/static/nav.js"></script>
     <title>Encoded Videos - TVB</title>
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#667eea">
@@ -23,37 +24,7 @@
             padding: 20px;
         }
 
-        .top-nav {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 16px;
-            padding: 12px 16px;
-            background: rgba(0, 0, 0, 0.35);
-            border-radius: 12px;
-            margin-bottom: 20px;
-        }
-
-        .top-nav .brand {
-            font-weight: 700;
-            color: #fff;
-            text-decoration: none;
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        .nav-links a {
-            color: #fff;
-            text-decoration: none;
-            font-size: 14px;
-            padding: 6px 10px;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.08);
-        }
+        
 
         .nav-links a:hover {
             background: rgba(255, 255, 255, 0.18);
@@ -217,17 +188,10 @@
 </head>
 <body>
     <div class="container">
-        <nav class="top-nav">
-            <a class="brand" href="/dashboard/{{ user_id }}">TVB</a>
-                    <div class="nav-links">
-                        <a href="/dashboard/{{ user_id }}">대시보드</a>
-                        <a href="/gallery/{{ user_id }}">갤러리</a>
-                        <a href="/encoded/{{ user_id }}" class="active">인코딩됨</a>
-                        <a href="/books/{{ user_id }}">eBook</a>
-                        <a href="/files/{{ user_id }}">파일</a>
-                        <a href="/search?user_id={{ user_id }}">검색</a>
-                        <a href="/download?user_id={{ user_id }}">다운로드/업로드</a>
-                    </div>        </nav>
+        <div id="tvb-nav-container"></div>
+        <script>
+            insertTVBNav({{ user_id }}, 'encoded');
+        </script>
 
         <div class="page-header">
             <h1 class="page-title">📱 Optimized Videos</h1>

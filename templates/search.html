@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="/static/nav.js"></script>
     <title>Search Videos - TVB</title>
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#667eea">
@@ -367,18 +368,10 @@
     </style>
 </head>
 <body>
-    <nav class="top-nav">
-        <a class="brand" href="/dashboard/{{ user_id }}">TVB</a>
-        <div class="nav-links">
-            <a href="/dashboard/{{ user_id }}">대시보드</a>
-            <a href="/gallery/{{ user_id }}">갤러리</a>
-            <a href="/encoded/{{ user_id }}">인코딩됨</a>
-            <a href="/books/{{ user_id }}">eBook</a>
-            <a href="/files/{{ user_id }}">파일</a>
-            <a href="/search?user_id={{ user_id }}">검색</a>
-            <a href="/download?user_id={{ user_id }}">다운로드/업로드</a>
-        </div>
-    </nav>
+    <div id="tvb-nav-container"></div>
+        <script>
+            insertTVBNav({{ user_id }}, 'search');
+        </script>
     <div class="container">
         <div class="header">
             <h1>🔍 Search Videos</h1>

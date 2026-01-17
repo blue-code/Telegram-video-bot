@@ -9,6 +9,7 @@ python-multipart==0.0.5
 
 # Video Processing
 yt-dlp==2025.10.14
+Pillow>=10.0.0
 
 # Text-to-Speech (Edge TTS)
 edge-tts>=6.1.0

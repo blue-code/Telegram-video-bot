@@ -808,7 +808,7 @@ async def update_video_metadata(
 ):
     """Update video metadata"""
     sb = await get_database()
-    
+
     update_data = {}
     if title:
         update_data['title'] = title
@@ -816,7 +816,435 @@ async def update_video_metadata(
         update_data['description'] = description
     if tags is not None:
         update_data['tags'] = tags
-    
+
     result = await sb.table(VIDEO_TABLE).update(update_data).eq("id", video_id).eq("user_id", user_id).execute()
-    
+
     return len(result.data) > 0
+
+
+# ============== COMIC BOOK FUNCTIONS ==============
+
+async def save_comic_metadata(comic_data: dict):
+    """
+    Save comic book metadata to database.
+
+    Args:
+        comic_data: Dictionary containing comic metadata
+            - file_id: int (reference to files table)
+            - user_id: int
+            - title: str
+            - series: str
+            - volume: int
+            - folder: str
+            - page_count: int
+            - cover_url: str (optional)
+            - metadata: dict (additional data like cover_bytes)
+
+    Returns:
+        Saved comic record or None
+    """
+    sb = await get_database()
+
+    # Check if comic already exists for this file_id
+    existing = await sb.table("comics").select("id").eq("file_id", comic_data.get("file_id")).execute()
+
+    if existing.data:
+        # Update existing record
+        result = await sb.table("comics").update(comic_data).eq("id", existing.data[0]["id"]).execute()
+    else:
+        # Insert new record
+        result = await sb.table("comics").insert(comic_data).execute()
+
+    return result.data[0] if result.data else None
+
+
+async def get_comic_by_file_id(file_id: int):
+    """
+    Get comic metadata by file ID.
+
+    Args:
+        file_id: File ID from files table
+
+    Returns:
+        Comic metadata or None
+    """
+    sb = await get_database()
+    result = await sb.table("comics").select("*").eq("file_id", file_id).execute()
+    return result.data[0] if result.data else None
+
+
+async def get_comics(
+    user_id: int,
+    limit: int = 24,
+    offset: int = 0,
+    query: str = None,
+    series: str = None,
+    sort_by: str = "latest"
+):
+    """
+    Get comics for a user with filtering and sorting.
+
+    Args:
+        user_id: User ID
+        limit: Number of comics to return
+        offset: Offset for pagination
+        query: Search query (title or series)
+        series: Filter by specific series
+        sort_by: Sort order ('latest', 'oldest', 'title', 'series', 'volume')
+
+    Returns:
+        List of comic metadata with file info
+    """
+    sb = await get_database()
+
+    # Join comics with files table
+    q = sb.table("comics").select("*, files(*)")
+
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+
+    # Search filter
+    if query:
+        # Search in title or series
+        q = q.or_(f"title.ilike.%{query}%,series.ilike.%{query}%")
+
+    # Series filter
+    if series:
+        q = q.eq("series", series)
+
+    # Sorting
+    if sort_by == "latest":
+        q = q.order("created_at", desc=True)
+    elif sort_by == "oldest":
+        q = q.order("created_at", desc=False)
+    elif sort_by == "title":
+        q = q.order("title", desc=False)
+    elif sort_by == "series":
+        q = q.order("series", desc=False).order("volume", desc=False)
+    elif sort_by == "volume":
+        q = q.order("volume", desc=False)
+    else:
+        q = q.order("created_at", desc=True)
+
+    q = q.range(offset, offset + limit - 1)
+    result = await q.execute()
+
+    return result.data if result.data else []
+
+
+async def count_comics(
+    user_id: int,
+    query: str = None,
+    series: str = None
+):
+    """
+    Count comics matching criteria.
+
+    Args:
+        user_id: User ID
+        query: Search query
+        series: Filter by series
+
+    Returns:
+        Comic count
+    """
+    sb = await get_database()
+    q = sb.table("comics").select("id", count="exact")
+
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+
+    if query:
+        q = q.or_(f"title.ilike.%{query}%,series.ilike.%{query}%")
+
+    if series:
+        q = q.eq("series", series)
+
+    result = await q.execute()
+    return result.count if hasattr(result, 'count') else 0
+
+
+async def get_comic_series(user_id: int):
+    """
+    Get list of all comic series for a user with volume count.
+
+    Args:
+        user_id: User ID
+
+    Returns:
+        List of series with metadata
+    """
+    sb = await get_database()
+
+    # Get all comics for user
+    q = sb.table("comics").select("series, title, file_id, created_at, metadata")
+
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+
+    result = await q.order("series", desc=False).order("volume", desc=False).execute()
+
+    if not result.data:
+        return []
+
+    # Group by series
+    series_map = {}
+    for comic in result.data:
+        series_name = comic.get("series") or comic.get("title") or "Unknown"
+
+        if series_name not in series_map:
+            series_map[series_name] = {
+                "series": series_name,
+                "volume_count": 0,
+                "first_file_id": comic.get("file_id"),
+                "latest_update": comic.get("created_at"),
+                "cover_url": None
+            }
+
+        series_map[series_name]["volume_count"] += 1
+
+        # Update latest update time
+        if comic.get("created_at") and comic["created_at"] > series_map[series_name]["latest_update"]:
+            series_map[series_name]["latest_update"] = comic["created_at"]
+
+    return list(series_map.values())
+
+
+async def get_comics_by_series(
+    user_id: int,
+    series_name: str,
+    limit: int = 100,
+    offset: int = 0
+):
+    """
+    Get all comics in a specific series.
+
+    Args:
+        user_id: User ID
+        series_name: Series name
+        limit: Number of comics to return
+        offset: Offset for pagination
+
+    Returns:
+        List of comics in the series
+    """
+    sb = await get_database()
+
+    q = sb.table("comics").select("*, files(*)").eq("series", series_name)
+
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+
+    # Sort by volume number
+    q = q.order("volume", desc=False).order("title", desc=False)
+    q = q.range(offset, offset + limit - 1)
+
+    result = await q.execute()
+    return result.data if result.data else []
+
+
+async def save_comic_progress(
+    user_id: int,
+    file_id: int,
+    current_page: int,
+    settings: dict = None
+):
+    """
+    Save or update comic reading progress.
+
+    Args:
+        user_id: User ID
+        file_id: File ID
+        current_page: Current page number
+        settings: Reading settings (reading_direction, mode)
+
+    Returns:
+        True if successful
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    sb = await get_database()
+
+    # Check if exists
+    existing = await sb.table("comic_progress").select("id").eq("user_id", user_id).eq("file_id", file_id).execute()
+
+    data = {
+        "user_id": user_id,
+        "file_id": file_id,
+        "current_page": current_page,
+        "updated_at": "now()"
+    }
+
+    if settings:
+        data["settings"] = settings
+
+    if existing.data:
+        # Update
+        logger.info(f"💾 Updating comic progress: user={user_id}, file={file_id}, page={current_page}")
+        await sb.table("comic_progress").update(data).eq("id", existing.data[0]['id']).execute()
+    else:
+        # Insert
+        logger.info(f"💾 Inserting comic progress: user={user_id}, file={file_id}, page={current_page}")
+        await sb.table("comic_progress").insert(data).execute()
+
+    return True
+
+
+async def get_comic_progress(user_id: int, file_id: int):
+    """
+    Get reading progress for a specific comic.
+
+    Args:
+        user_id: User ID
+        file_id: File ID
+
+    Returns:
+        Progress data or None
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    sb = await get_database()
+    result = await sb.table("comic_progress").select("*").eq("user_id", user_id).eq("file_id", file_id).execute()
+
+    if result.data:
+        progress = result.data[0]
+        logger.info(f"📖 Loading comic progress: user={user_id}, file={file_id}, page={progress.get('current_page', 0)}")
+        return progress
+    else:
+        logger.info(f"📖 No comic progress found: user={user_id}, file={file_id}")
+        return None
+
+
+async def get_recent_comic_reading(user_id: int, limit: int = 5):
+    """
+    Get recently read comics.
+
+    Args:
+        user_id: User ID
+        limit: Number of comics to return
+
+    Returns:
+        List of recently read comics with progress
+    """
+    sb = await get_database()
+
+    # Join with comics and files table
+    result = await sb.table("comic_progress").select("*, comics(*, files(*))").eq("user_id", user_id).order("updated_at", desc=True).limit(limit).execute()
+
+    if result.data:
+        return result.data
+    return []
+
+
+async def delete_comic(file_id: int, user_id: int):
+    """
+    Delete a comic record.
+
+    Args:
+        file_id: File ID
+        user_id: User ID
+
+    Returns:
+        True if successful
+    """
+    sb = await get_database()
+
+    # Delete comic progress first
+    try:
+        await sb.table("comic_progress").delete().eq("file_id", file_id).eq("user_id", user_id).execute()
+    except Exception:
+        pass
+
+    # Delete comic metadata
+    query = sb.table("comics").delete().eq("file_id", file_id)
+
+    if not _is_super_admin(user_id):
+        query = query.eq("user_id", user_id)
+
+    result = await query.execute()
+    return bool(result.data)
+
+
+async def add_comic_favorite(user_id: int, file_id: int):
+    """
+    Add comic to user's favorites.
+
+    Args:
+        user_id: User ID
+        file_id: File ID
+
+    Returns:
+        True if successful
+    """
+    try:
+        sb = await get_database()
+        await sb.table("comic_favorites").insert({
+            "user_id": user_id,
+            "file_id": file_id
+        }).execute()
+        return True
+    except Exception:
+        # Might already exist (unique constraint)
+        return False
+
+
+async def remove_comic_favorite(user_id: int, file_id: int):
+    """
+    Remove comic from user's favorites.
+
+    Args:
+        user_id: User ID
+        file_id: File ID
+
+    Returns:
+        True if successful
+    """
+    try:
+        sb = await get_database()
+        await sb.table("comic_favorites").delete().eq("user_id", user_id).eq("file_id", file_id).execute()
+        return True
+    except Exception:
+        return False
+
+
+async def is_comic_favorite(user_id: int, file_id: int):
+    """
+    Check if comic is in user's favorites.
+
+    Args:
+        user_id: User ID
+        file_id: File ID
+
+    Returns:
+        True if favorite, False otherwise
+    """
+    try:
+        sb = await get_database()
+        result = await sb.table("comic_favorites").select("id").eq("user_id", user_id).eq("file_id", file_id).execute()
+        return bool(result.data)
+    except Exception:
+        return False
+
+
+async def get_favorite_comics(user_id: int, limit: int = 50, offset: int = 0):
+    """
+    Get user's favorite comics.
+
+    Args:
+        user_id: User ID
+        limit: Number of comics to return
+        offset: Offset for pagination
+
+    Returns:
+        List of favorite comics
+    """
+    sb = await get_database()
+
+    # Join with comics and files table
+    result = await sb.table("comic_favorites").select("*, comics(*, files(*))").eq("user_id", user_id).order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+
+    if result.data:
+        return [item.get("comics") for item in result.data if item.get("comics")]
+    return []
