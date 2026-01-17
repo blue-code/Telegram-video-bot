@@ -83,3 +83,19 @@
   - [x] Sub-task: epub.js 기반 뷰어 및 터치/메뉴 인터페이스 구현
   - [x] Sub-task: 독서 진행 상황(CFI) 자동 저장 및 이어보기 기능 구현
   - [x] Sub-task: 뷰어 로딩 안정성 개선 (Blob loading)
+
+## Phase 12: 코믹스(만화) 뷰어 지원
+- [x] Task: 코믹스 파서 및 파일 처리 구현
+  - [x] Sub-task: ZIP/CBZ 파일 압축 해제 및 이미지 정렬 로직 (`comic_parser.py`)
+  - [x] Sub-task: 시리즈/권수 메타데이터 자동 추출 정규식 구현
+- [x] Task: 웹 코믹스 뷰어 구현
+  - [x] Sub-task: 이미지 지연 로딩(Lazy Loading) 및 좌우 터치 네비게이션 (`comic_reader.html`)
+  - [x] Sub-task: 시리즈별 그룹화 및 이어보기 지원
+
+## Phase 13: TTS 오디오북 통합
+- [x] Task: TTS 엔진 통합
+  - [x] Sub-task: Microsoft Edge TTS (`edge-tts`) 및 Kokoro 모델 연동
+  - [x] Sub-task: 텍스트 추출 및 오디오 스트림 변환 파이프라인 구축
+- [x] Task: 오디오북 플레이어 UI
+  - [x] Sub-task: 텍스트 하이라이팅 및 음성 동기화
+  - [x] Sub-task: 백그라운드 재생 지원

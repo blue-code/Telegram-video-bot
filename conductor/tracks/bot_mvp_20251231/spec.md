@@ -6,7 +6,7 @@
 ## 2. 핵심 아키텍처
 - **Language:** Python 3.10+ (Asyncio)
 - **Framework:** `python-telegram-bot`
-- **Database:** MongoDB Atlas (Driver: `motor`)
+- **Database:** Supabase (PostgreSQL) - Driver: `supabase`
 - **Tools:** `yt-dlp` (Downloading), `FFmpeg` (Processing & Splitting)
 - **Queue:** Python 내장 `asyncio.Queue` (단일 세션 로컬 처리 최적화)
 
@@ -22,18 +22,19 @@
 
 ### 3.3 텔레그램 업로드 및 저장
 - 처리된 영상/오디오 파일을 텔레그램으로 전송.
-- 전송 후 생성된 `file_id`를 몽고디비에 저장 (중복 전송 방지 및 스트리밍용).
+- 전송 후 생성된 `file_id`를 Supabase에 저장 (중복 전송 방지 및 스트리밍용).
 
-### 3.4 데이터베이스 스키마 (MongoDB)
-- **Videos Collection:**
-  - `url` (String, Index)
-  - `title` (String)
-  - `file_id` (String)
-  - `quality` (String)
-  - `size` (Number)
-  - `duration` (Number)
-  - `user_id` (Number)
-  - `created_at` (Date)
+### 3.4 데이터베이스 스키마 (Supabase PostgreSQL)
+- **videos 테이블:**
+  - `id` (UUID, Primary Key)
+  - `url` (Text, Unique Index)
+  - `title` (Text)
+  - `file_ids` (JSONB Array) - 분할된 파일들의 ID 목록
+  - `quality` (Text)
+  - `size` (BigInt)
+  - `duration` (Integer)
+  - `user_id` (BigInt)
+  - `created_at` (Timestamptz)
 
 ## 4. UI/UX 가이드라인
 - **페르소나:** 활기차고 친절한 친구 말투 (이모지 활용).
