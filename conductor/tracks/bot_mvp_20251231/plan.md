@@ -94,7 +94,7 @@
 
 ## Phase 13: TTS 오디오북 통합
 - [x] Task: TTS 엔진 통합
-  - [x] Sub-task: Microsoft Edge TTS (`edge-tts`) 및 Kokoro 모델 연동
+  - [x] Sub-task: Microsoft Edge TTS (`edge-tts`) 연동
   - [x] Sub-task: 텍스트 추출 및 오디오 스트림 변환 파이프라인 구축
 - [x] Task: 오디오북 플레이어 UI
   - [x] Sub-task: 텍스트 하이라이팅 및 음성 동기화

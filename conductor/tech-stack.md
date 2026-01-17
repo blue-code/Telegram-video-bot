@@ -11,7 +11,7 @@
 - **데이터베이스:** Supabase (PostgreSQL) - `supabase-py` (Async)
 - **eBook 처리:** `epub.js` (Frontend Viewer), `zipfile`/`xml` (Metadata Parsing)
 - **코믹스 처리:** `Pillow` (Image Processing), `zipfile` (Archive Handling)
-- **TTS (음성 합성):** `edge-tts` (Microsoft Edge Online TTS), `Kokoro` (Offline/High Quality Model support)
+- **TTS (음성 합성):** `edge-tts` (Microsoft Edge Online TTS)
 
 ## 3. 비동기 처리 및 작업 관리
 - **작업 큐:** Python `asyncio` BackgroundTasks
