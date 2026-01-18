@@ -26,6 +26,8 @@ from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
 from src.transcoder import transcode_video_task, cleanup_old_encoded_files
 from src.file_manager import prepare_download_task, DOWNLOAD_CACHE_DIR, cleanup_old_downloads
+SUBTITLE_CACHE_DIR = Path("download_cache") / "subtitles"
+SUBTITLE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 from src.epub_parser import get_epub_metadata
 import uuid
 import aiofiles
@@ -74,8 +76,9 @@ async def startup_event():
         asyncio.create_task(cleanup_old_downloads())
         
         # Start comic series migration (mostly harmless if already done)
-        from src.comic_migration import migrate_comic_series
-        asyncio.create_task(migrate_comic_series())
+        # Disabled auto-run to prevent unnecessary load on every startup
+        # from src.comic_migration import migrate_comic_series
+        # asyncio.create_task(migrate_comic_series())
     except Exception as e:
         logger.error(f"Failed to start background tasks: {e}")
 
@@ -419,6 +422,24 @@ async def watch_video(request: Request, short_id: str):
                 "part": 1
             }]
 
+        # Find subtitles for this video
+        from src.subtitle_manager import find_subtitle_files
+        video_filename = video.get("title", "")
+        # If title doesn't have extension, it might not match well.
+        # But find_subtitle_files uses Path(video_file_name).stem.
+        # Usually videos table stores title, sometimes with extension.
+        # Let's try to get original filename if possible, or just use title.
+        subtitles = await find_subtitle_files(video_filename, video.get("user_id") or DEFAULT_USER_ID)
+        
+        formatted_subtitles = []
+        for sub in subtitles:
+            formatted_subtitles.append({
+                "id": sub["id"],
+                "file_id": sub["file_id"],
+                "file_name": sub["file_name"],
+                "label": sub["file_name"].split(".")[-2] if sub["file_name"].count(".") > 1 else "Default"
+            })
+
         return templates.TemplateResponse("watch.html", {
             "request": request,
             "short_id": short_id,
@@ -431,7 +452,8 @@ async def watch_video(request: Request, short_id: str):
             "playlist": playlist,
             "playlist_total": len(playlist),
             "is_encoded": is_encoded,
-            "encoded_url": encoded_url
+            "encoded_url": encoded_url,
+            "subtitles": formatted_subtitles
         })
     except Exception as e:
         logger.error(f"Error in watch_video: {e}")
@@ -1431,6 +1453,70 @@ async def toggle_favorite(
             "success": False,
             "message": str(e)
         }
+
+
+@app.get("/api/subtitles/{file_id}")
+async def get_subtitle(file_id: str):
+    """
+    Get subtitle for a video, converted to WebVTT.
+    """
+    from src.subtitle_manager import detect_encoding, convert_smi_to_vtt, convert_srt_to_vtt
+    
+    try:
+        # Check cache
+        cache_path = SUBTITLE_CACHE_DIR / f"{file_id}.vtt"
+        if cache_path.exists():
+            return FileResponse(cache_path, media_type="text/vtt")
+            
+        # Download from Telegram
+        download_url, _ = await get_file_info_cached(file_id)
+        
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            resp = await client.get(download_url)
+            resp.raise_for_status()
+            content_bytes = resp.content
+            
+        # Detect encoding
+        encoding = detect_encoding(content_bytes)
+        logger.info(f"Subtitle encoding detected: {encoding} for file_id={file_id}")
+        
+        try:
+            content = content_bytes.decode(encoding)
+        except UnicodeDecodeError:
+            # Fallback to cp949 if detection fails for Korean
+            content = content_bytes.decode('cp949', errors='replace')
+            
+        # Determine format and convert
+        # We need the original filename to check extension, or just try to detect content
+        # But we can get file info from DB
+        from src.db import get_file_by_id
+        # file_id passed to this endpoint might be Telegram file_id or DB id.
+        # Usually we use DB id for our APIs.
+        try:
+            db_id = int(file_id)
+            file_record = await get_file_by_id(db_id)
+            filename = file_record.get("file_name", "").lower() if file_record else ""
+        except ValueError:
+            # Not an integer, maybe it's already a telegram file_id
+            filename = ""
+            
+        if filename.endswith(".smi") or "<SAMI" in content.upper():
+            vtt_content = convert_smi_to_vtt(content)
+        elif filename.endswith(".srt") or " --> " in content:
+            vtt_content = convert_srt_to_vtt(content)
+        else:
+            # Fallback or assume SRT
+            vtt_content = convert_srt_to_vtt(content)
+            
+        # Save to cache
+        async with aiofiles.open(cache_path, "w", encoding="utf-8") as f:
+            await f.write(vtt_content)
+            
+        return Response(content=vtt_content, media_type="text/vtt")
+        
+    except Exception as e:
+        logger.error(f"Error serving subtitle: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
@@ -2766,7 +2852,7 @@ async def delete_file_api(file_id: int, user_id: Optional[int] = None, request: 
 async def dashboard_page(request: Request, user_id: int):
     """User dashboard with statistics and quick access"""
     from src.user_manager import get_user_stats
-    from src.db import get_database, get_user_videos, get_recent_reading
+    from src.db import get_database, get_user_videos, get_recent_reading, get_recent_comic_reading
     from src.link_shortener import get_or_create_short_link
     
     try:
@@ -2777,7 +2863,7 @@ async def dashboard_page(request: Request, user_id: int):
         # Get recent videos
         recent_videos = await get_user_videos(user_id, limit=5)
         
-        # Get recent reading
+        # Get recent reading (EPUB)
         recent_reading = await get_recent_reading(user_id)
         if recent_reading:
             # Format file info
@@ -2785,6 +2871,35 @@ async def dashboard_page(request: Request, user_id: int):
             if file_info:
                 recent_reading['title'] = file_info.get('file_name', 'Unknown Book')
                 recent_reading['percent_fmt'] = f"{recent_reading.get('percent', 0):.1f}%"
+        
+        # Get recent comic reading
+        recent_comics = await get_recent_comic_reading(user_id, limit=5)
+        formatted_comics = []
+        for rc in recent_comics:
+            # Structure: rc['files']['comics'] might be a list or dict
+            file_info = rc.get('files')
+            if not file_info:
+                continue
+                
+            comics_data = file_info.get('comics')
+            # Handle if it's a list (1:N) or dict (1:1)
+            comic_data = None
+            if isinstance(comics_data, list) and comics_data:
+                comic_data = comics_data[0]
+            elif isinstance(comics_data, dict):
+                comic_data = comics_data
+            
+            if comic_data:
+                title = comic_data.get('title') or file_info.get('file_name', 'Unknown Comic')
+                formatted_comics.append({
+                    'file_id': rc.get('file_id'),
+                    'title': title,
+                    'series': comic_data.get('series'),
+                    'current_page': rc.get('current_page', 0),
+                    'total_pages': comic_data.get('page_count', 0),
+                    'cover_url': f"/api/comics/thumbnail/{rc.get('file_id')}",
+                    'updated_at': format_date(rc.get('updated_at'))
+                })
         
         # Format videos
         formatted_videos = []
@@ -2823,7 +2938,8 @@ async def dashboard_page(request: Request, user_id: int):
             "user_id": user_id,
             "stats": stats,
             "recent_videos": formatted_videos,
-            "recent_reading": recent_reading
+            "recent_reading": recent_reading,
+            "recent_comics": formatted_comics
         })
     except Exception as e:
         logger.error(f"Dashboard error: {e}")
@@ -3598,8 +3714,8 @@ async def get_tts_voices():
 
 # ============== COMIC BOOK ROUTES ==============
 
-@app.get("/comics/{user_id}", response_class=HTMLResponse)
-async def comics_page(
+@app.get("/comics/files/{user_id}", response_class=HTMLResponse)
+async def comic_files_page(
     request: Request,
     user_id: int,
     page: int = 1,
@@ -3608,7 +3724,7 @@ async def comics_page(
     series: str = None,
     sort_by: str = "latest"
 ):
-    """Comic books library page"""
+    """Comic books flat file list page"""
     from src.db import get_comics, count_comics
 
     try:
@@ -3657,7 +3773,7 @@ async def comics_page(
         })
 
     except Exception as e:
-        logger.error(f"Error loading comics page: {e}")
+        logger.error(f"Error loading comic files page: {e}")
         logger.error(traceback.format_exc())
         return templates.TemplateResponse("error.html", {
             "request": request,
@@ -3668,16 +3784,16 @@ async def comics_page(
 
 @app.get("/comics", response_class=HTMLResponse)
 async def comics_default_page(request: Request):
-    """Comics page with default user"""
-    return await comics_page(request, DEFAULT_USER_ID)
+    """Comics default redirect"""
+    return RedirectResponse(url=f"/comics/{DEFAULT_USER_ID}")
 
 
-@app.get("/comic_series/{user_id}", response_class=HTMLResponse)
+@app.get("/comics/{user_id}", response_class=HTMLResponse)
 async def comic_series_list_page(
     request: Request,
     user_id: int
 ):
-    """List all comic series"""
+    """List all comic series (Main Entry Point)"""
     from src.db import get_comic_series
 
     try:
@@ -3787,6 +3903,7 @@ async def comic_reader_page(
             "file_id": file_id,
             "user_id": user_id,
             "title": comic.get("title") or file_data.get("file_name"),
+            "series": comic.get("series") or "Default",
             "page_count": comic.get("page_count", 0),
             "current_page": current_page,
             "settings": json.dumps(settings)
@@ -4047,6 +4164,25 @@ async def remove_comic_favorite(
         return {"success": True}
     except Exception as e:
         logger.error(f"Error removing favorite: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/api/comics/migrate")
+async def trigger_comic_migration(
+    background_tasks: BackgroundTasks,
+    user_id: int = Body(..., embed=True)
+):
+    """Trigger manual comic series migration"""
+    from src.comic_migration import migrate_comic_series
+    
+    try:
+        # Check if user is admin (optional, for now allow all or just check ID)
+        # Assuming simple access for now as it's a maintenance task
+        
+        background_tasks.add_task(migrate_comic_series, user_id)
+        return {"success": True, "message": "Comic series migration started in background."}
+    except Exception as e:
+        logger.error(f"Error triggering migration: {e}")
         return {"success": False, "message": str(e)}
 
 

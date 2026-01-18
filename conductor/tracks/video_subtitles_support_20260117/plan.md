@@ -10,14 +10,14 @@
     - [x] Sub-task: Implement `convert_srt_to_vtt(srt_content)` (if needed, mainly for cleanup)
 - [x] Task: Conductor - User Manual Verification 'Phase 1' (Protocol in workflow.md)
 
-## Phase 2: Subtitle Streaming API
-- [ ] Task: Create API Endpoints
-    - [ ] Sub-task: Add `GET /api/subtitles/{file_id}` in `src/server.py` to stream converted VTT
-    - [ ] Sub-task: Handle file download from Telegram, conversion, and caching
-- [ ] Task: Update Video Watch Logic
-    - [ ] Sub-task: Modify `watch_video` route to fetch subtitle list for the video
-    - [ ] Sub-task: Pass subtitle tracks to `templates/watch.html` context
-- [ ] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
+## Phase 2: Subtitle Streaming API [checkpoint: 9f3eaf1]
+- [x] Task: Create API Endpoints
+    - [x] Sub-task: Add `GET /api/subtitles/{file_id}` in `src/server.py` to stream converted VTT
+    - [x] Sub-task: Handle file download from Telegram, conversion, and caching
+- [x] Task: Update Video Watch Logic
+    - [x] Sub-task: Modify `watch_video` route to fetch subtitle list for the video
+    - [x] Sub-task: Pass subtitle tracks to `templates/watch.html` context
+- [x] Task: Conductor - User Manual Verification 'Phase 2' (Protocol in workflow.md)
 
 ## Phase 3: Web Player Integration
 - [ ] Task: Update Player UI
