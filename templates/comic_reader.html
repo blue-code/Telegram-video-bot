@@ -342,12 +342,28 @@
         const fileId = {{ file_id }};
         const userId = {{ user_id }};
         const pageCount = {{ page_count }};
-        const settingsData = {{ settings|safe }};
+        const seriesName = {{ series|tojson|safe }}; // 시리즈명 (JSON 안전 변환)
+        
+        // 서버에서 전달받은 설정 (해당 파일에 저장된 진행 정보)
+        const serverSettings = {{ settings|safe }};
 
+        // 로컬 스토리지에서 시리즈별 설정 불러오기
+        const storageKey = `comic_settings_${seriesName}`;
+        let localSettings = {};
+        try {
+            const stored = localStorage.getItem(storageKey);
+            if (stored) localSettings = JSON.parse(stored);
+        } catch (e) { console.error("LocalStorage error", e); }
+
+        // 설정 우선순위: 로컬 스토리지(최신 시리즈 설정) > 서버 설정(파일별 저장됨) > 기본값
+        // 단, 서버 설정이 존재하고 유효하다면(즉, 이전에 이 파일을 읽은 적이 있다면) 서버 설정을 존중할 수도 있으나,
+        // 사용자는 '시리즈 설정 유지'를 원하므로 로컬 스토리지를 우선합니다.
+        // 다만, 페이지 정보는 파일별로 다르므로 설정(모드/방향)만 가져옵니다.
+        
         let currentPage = {{ current_page }};
-        let readingDirection = settingsData.reading_direction || 'ltr';
-        let mode = settingsData.mode || 'comic';
-        let autoSplitEnabled = settingsData.auto_split !== false; // 기본값: true
+        let readingDirection = localSettings.reading_direction || serverSettings.reading_direction || 'ltr';
+        let mode = localSettings.mode || serverSettings.mode || 'comic';
+        let autoSplitEnabled = (localSettings.auto_split !== undefined) ? localSettings.auto_split : (serverSettings.auto_split !== false);
         let isFavorite = false;
 
         const pageImg = document.getElementById('page-image');
@@ -808,6 +824,17 @@
         }
 
         function saveProgress() {
+            // 로컬 스토리지에 시리즈 설정 저장
+            const currentSettings = {
+                reading_direction: readingDirection,
+                mode: mode,
+                auto_split: autoSplitEnabled
+            };
+            try {
+                localStorage.setItem(storageKey, JSON.stringify(currentSettings));
+            } catch (e) { console.error("LocalStorage save error", e); }
+
+            // 서버에 진행 상황 및 설정 저장
             fetch('/api/comics/progress', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -815,11 +842,7 @@
                     user_id: userId,
                     file_id: fileId,
                     current_page: currentPage,
-                    settings: {
-                        reading_direction: readingDirection,
-                        mode: mode,
-                        auto_split: autoSplitEnabled
-                    }
+                    settings: currentSettings
                 })
             }).then(res => res.json())
               .then(data => {
