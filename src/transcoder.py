@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from telegram import Bot
 from telegram.request import HTTPXRequest
 from telegram.constants import ParseMode
+from src.subtitle_manager import find_subtitle_files
 
 # Logger setup
 logger = logging.getLogger(__name__)
@@ -130,7 +131,27 @@ async def transcode_video_task(
                 if not success:
                     raise Exception("Failed to download video file")
 
-        # 3. Transcode (Re-encode)
+        # 3. Download Subtitles (if any)
+        subtitle_path = None
+        try:
+            logger.info("🔍 Searching for subtitles...")
+            # Use title for matching
+            subs = await find_subtitle_files(title, user_id)
+            if subs:
+                sub = subs[0] # Use the first matching subtitle
+                logger.info(f"📥 Downloading subtitle for merge: {sub['file_name']}")
+                sub_url = await get_telegram_file_url(bot_token, sub["file_id"])
+                subtitle_ext = Path(sub['file_name']).suffix
+                subtitle_path = os.path.join(temp_dir, f"subtitle{subtitle_ext}")
+                
+                async with httpx.AsyncClient(timeout=30.0) as sub_client:
+                    await download_file(sub_client, sub_url, subtitle_path)
+            else:
+                logger.info("   No matching subtitles found for this video.")
+        except Exception as sub_e:
+            logger.warning(f"⚠️ Failed to fetch subtitles for transcoding (non-fatal): {sub_e}")
+
+        # 4. Transcode (Re-encode)
         logger.info(f"⚙️ Transcoding to H.264/AAC ({resolution}, faststart)...")
         
         # Verify input file
@@ -152,11 +173,27 @@ async def transcode_video_task(
         # -preset veryfast: Faster encoding
         transcode_cmd = [
             ffmpeg_exe, "-y",
-            "-i", input_path,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-            "-c:a", "aac", "-b:a", "128k",
-            "-movflags", "+faststart"
+            "-i", input_path
         ]
+
+        if subtitle_path:
+            transcode_cmd.extend(["-i", subtitle_path])
+
+        transcode_cmd.extend([
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+            "-c:a", "aac", "-b:a", "128k"
+        ])
+
+        if subtitle_path:
+            # MP4 supports 'mov_text' for soft subtitles
+            transcode_cmd.extend(["-c:s", "mov_text"])
+            # Map video, audio from first input (0) and subtitle from second (1)
+            transcode_cmd.extend(["-map", "0:v", "-map", "0:a", "-map", "1:s"])
+        else:
+            # Map video and audio explicitly
+            transcode_cmd.extend(["-map", "0:v", "-map", "0:a"])
+
+        transcode_cmd.extend(["-movflags", "+faststart"])
 
         # Apply scaling filter based on resolution
         if resolution == "1080p":
