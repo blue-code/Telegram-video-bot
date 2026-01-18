@@ -473,7 +473,10 @@
 
 
             <div class="video-container">
-                <video id="video-player" controls autoplay preload="auto" name="media">
+                <video id="video-player" controls autoplay preload="auto" name="media" crossorigin="anonymous">
+                    {% for sub in subtitles %}
+                    <track label="{{ sub.label }}" kind="subtitles" srclang="{{ sub.label }}" src="/api/subtitles/{{ sub.id }}" {% if loop.first %}default{% endif %}>
+                    {% endfor %}
                     Your browser does not support the video tag.
                 </video>
                 <div class="loading-spinner" id="loading-spinner"></div>
