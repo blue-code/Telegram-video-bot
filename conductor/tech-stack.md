@@ -12,6 +12,7 @@
 - **eBook 처리:** `epub.js` (Frontend Viewer), `zipfile`/`xml` (Metadata Parsing)
 - **코믹스 처리:** `Pillow` (Image Processing), `zipfile` (Archive Handling)
 - **TTS (음성 합성):** `edge-tts` (Microsoft Edge Online TTS)
+- **자막 처리:** `chardet` (인코딩 감지), WebVTT 변환 로직
 
 ## 3. 비동기 처리 및 작업 관리
 - **작업 큐:** Python `asyncio` BackgroundTasks
