@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>eBook 라이브러리 - TVB</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#667eea">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #fff;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+
+        /* Nav */
+        .top-nav {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 16px; background: rgba(0,0,0,0.35);
+            border-radius: 12px; margin-bottom: 20px;
+        }
+        .top-nav .brand { font-weight: 700; color: #fff; text-decoration: none; }
+        .top-nav .back-btn {
+            color: #fff; text-decoration: none; font-size: 14px;
+            padding: 6px 12px; border-radius: 999px;
+            background: rgba(255,255,255,0.1);
+        }
+        .top-nav .back-btn:hover { background: rgba(255,255,255,0.25); }
+
+        .page-header { text-align: center; margin-bottom: 40px; }
+        .page-title { font-size: 36px; font-weight: 700; margin-bottom: 10px; }
+        .page-subtitle { font-size: 16px; color: #e0e0e0; }
+
+        /* Series Grid */
+        .series-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 30px;
+        }
+
+        .series-card {
+            background: rgba(0,0,0,0.2); border-radius: 12px; overflow: hidden;
+            transition: transform 0.3s, box-shadow 0.3s;
+            cursor: pointer; position: relative;
+        }
+        .series-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.4);
+            background: rgba(0,0,0,0.4);
+        }
+
+        .series-cover {
+            width: 100%; aspect-ratio: 2/3; background: #2d3748;
+            position: relative; overflow: hidden;
+        }
+        .series-cover img {
+            width: 100%; height: 100%; object-fit: cover;
+        }
+        .series-placeholder {
+            width: 100%; height: 100%; display: flex;
+            align-items: center; justify-content: center;
+            font-size: 64px; color: rgba(255,255,255,0.2);
+            background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%);
+        }
+
+        .series-info { padding: 20px; }
+        .series-name {
+            font-weight: 600; font-size: 16px; margin-bottom: 10px;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .series-meta {
+            font-size: 14px; color: #aaa;
+            display: flex; justify-content: space-between;
+        }
+
+        .empty-state { text-align: center; padding: 60px; color: rgba(255,255,255,0.6); }
+
+        @media (max-width: 600px) {
+            .series-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 15px; }
+            .page-title { font-size: 28px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <nav class="top-nav">
+            <a class="brand" href="/dashboard/{{ user_id }}">📚 TVB</a>
+            <div style="display: flex; gap: 10px;">
+                <a class="back-btn" href="/books/files/{{ user_id }}">📂 전체 책 보기</a>
+                <a class="back-btn" href="/dashboard/{{ user_id }}">← 대시보드</a>
+            </div>
+        </nav>
+
+        <div class="page-header">
+            <h1 class="page-title">📚 eBook 라이브러리</h1>
+            <p class="page-subtitle">{{ series_list|length }}개의 시리즈/책</p>
+            <button onclick="rescanSeries()" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); padding: 8px 16px; color: #aaa; border-radius: 20px; cursor: pointer; margin-top: 10px; font-size: 12px;">
+                🔄 시리즈 재정리
+            </button>
+        </div>
+
+        {% if series_list %}
+        <div class="series-grid">
+            {% for series in series_list %}
+            <div class="series-card" onclick="window.location.href='/books/series/{{ user_id }}/{{ series.series|urlencode }}'">
+                <div class="series-cover">
+                    {% if series.cover_url %}
+                        <img src="{{ series.cover_url }}" alt="{{ series.series }}" loading="lazy">
+                    {% else %}
+                        <div class="series-placeholder">📖</div>
+                    {% endif %}
+                    {% if series.count > 1 %}
+                    <div style="position: absolute; top: 10px; right: 10px; background: rgba(102, 126, 234, 0.9); padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">
+                        {{ series.count }}권
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="series-info">
+                    <div class="series-name" title="{{ series.series }}">{{ series.series }}</div>
+                    <div class="series-meta">
+                        <span>{{ series.count }}권</span>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state">
+            <div style="font-size: 64px; margin-bottom: 20px;">📚</div>
+            <p>eBook이 없습니다.</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        async function rescanSeries() {
+            if (!confirm("모든 EPUB 파일을 다시 스캔하여 시리즈를 재설정하시겠습니까? 시간이 걸릴 수 있습니다.")) return;
+            
+            try {
+                const response = await fetch('/api/epub/migrate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: {{ user_id }} })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    alert("재스캔 작업이 시작되었습니다. 잠시 후 새로고침하세요.");
+                } else {
+                    alert("오류: " + result.message);
+                }
+            } catch (e) {
+                alert("네트워크 오류: " + e);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -103,14 +103,20 @@
         </script>
 
         <div class="page-header">
-            <h1 class="page-title">📚 eBooks Library</h1>
+            <h1 class="page-title">📚 eBooks File List</h1>
             <p class="page-subtitle">Your collection of {{ total_count }} books</p>
         </div>
 
-        <form class="search-bar" action="/books/{{ user_id }}" method="GET">
+        <form class="search-bar" action="/books/files/{{ user_id }}" method="GET">
             <input type="text" name="q" class="search-input" placeholder="Search by title or author..." value="{{ query }}">
             <button type="submit" class="search-btn">🔍</button>
         </form>
+
+        <div style="text-align: center; margin-bottom: 30px;">
+            <a href="/books/{{ user_id }}" style="background: rgba(102, 126, 234, 0.5); padding: 8px 16px; color: #fff; border-radius: 20px; text-decoration: none; font-weight: bold;">
+                🔙 시리즈 뷰로 이동
+            </a>
+        </div>
 
         {% if books %}
         <div class="book-grid">

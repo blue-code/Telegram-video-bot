@@ -2205,7 +2205,7 @@ async def save_progress_api(
         logger.error(f"Save progress error: {e}")
         return {"success": False, "message": str(e)}
 
-@app.get("/books/{user_id}", response_class=HTMLResponse)
+@app.get("/books/files/{user_id}", response_class=HTMLResponse)
 async def books_page(
     request: Request,
     user_id: int,
@@ -2278,7 +2278,80 @@ async def books_page(
 
 @app.get("/books", response_class=HTMLResponse)
 async def books_default_page(request: Request):
-    return await books_page(request, DEFAULT_USER_ID)
+    return RedirectResponse(url=f"/books/{DEFAULT_USER_ID}")
+
+@app.get("/books/{user_id}", response_class=HTMLResponse)
+async def book_series_list_page(
+    request: Request,
+    user_id: int
+):
+    """List all book series"""
+    from src.db import get_book_series
+    
+    try:
+        series_list = await get_book_series(user_id)
+        
+        # Add cover URL
+        for series in series_list:
+            if series.get("cover_file_id"):
+                series["cover_url"] = f"/thumb/{series['cover_file_id']}"
+                
+        return templates.TemplateResponse("books_series.html", {
+            "request": request,
+            "user_id": user_id,
+            "series_list": series_list
+        })
+    except Exception as e:
+        logger.error(f"Error loading book series: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load book series"
+        })
+
+@app.get("/books/series/{user_id}/{series_name}", response_class=HTMLResponse)
+async def book_series_detail_page(
+    request: Request,
+    user_id: int,
+    series_name: str
+):
+    """Book series detail page"""
+    from src.db import get_books_by_series
+    from urllib.parse import unquote
+    
+    try:
+        series_name_decoded = unquote(series_name)
+        books = await get_books_by_series(user_id, series_name_decoded)
+        
+        # Format books
+        formatted_books = []
+        for b in books:
+            metadata = b.get("metadata") or {}
+            cover_file_id = metadata.get("cover_file_id")
+            cover_url = f"/thumb/{cover_file_id}" if cover_file_id else ""
+            
+            formatted_books.append({
+                "id": b["id"],
+                "title": metadata.get("book_title") or b["file_name"],
+                "cover_url": cover_url,
+                "volume": metadata.get("volume"),
+                "size_mb": f"{b['file_size'] / (1024*1024):.1f}" if b.get('file_size') else ""
+            })
+            
+        return templates.TemplateResponse("book_series_detail.html", {
+            "request": request,
+            "user_id": user_id,
+            "series_name": series_name_decoded,
+            "books": formatted_books,
+            "total_count": len(books)
+        })
+    except Exception as e:
+        logger.error(f"Error loading book series detail: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load series detail"
+        })
 
 @app.get("/files/{user_id}", response_class=HTMLResponse)
 async def files_page(

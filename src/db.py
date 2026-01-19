@@ -1254,3 +1254,72 @@ async def get_favorite_comics(user_id: int, limit: int = 50, offset: int = 0):
     if result.data:
         return [item.get("comics") for item in result.data if item.get("comics")]
     return []
+
+
+async def get_book_series(user_id: int):
+    """
+    Get list of all book series for a user.
+    """
+    sb = await get_database()
+    q = sb.table(FILES_TABLE).select("*")
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+    
+    # Fetch reasonably large number of files to group
+    # Note: Filtering by extension in DB is preferable if possible to reduce data
+    # but ILIKE %.epub might fail on some WAFs.
+    # We'll fetch and filter.
+    result = await q.order("created_at", desc=True).limit(2000).execute()
+    
+    files = result.data if result.data else []
+    
+    series_map = {}
+    for f in files:
+        # Filter for EPUB
+        if not f.get("file_name", "").lower().endswith(".epub"):
+            continue
+            
+        metadata = f.get("metadata") or {}
+        series_name = metadata.get("series") or f.get("file_name")
+        
+        if series_name not in series_map:
+            series_map[series_name] = {
+                "series": series_name,
+                "count": 0,
+                "cover_file_id": metadata.get("cover_file_id"),
+                "latest_update": f.get("created_at")
+            }
+            
+        series_map[series_name]["count"] += 1
+        if f.get("created_at") > series_map[series_name]["latest_update"]:
+            series_map[series_name]["latest_update"] = f["created_at"]
+            
+    # Sort by latest update
+    return sorted(series_map.values(), key=lambda x: x["latest_update"], reverse=True)
+
+
+async def get_books_by_series(user_id: int, series_name: str):
+    """
+    Get all books in a series.
+    """
+    sb = await get_database()
+    q = sb.table(FILES_TABLE).select("*")
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+        
+    # Filter by series in metadata
+    q = q.eq("metadata->>series", series_name)
+    
+    # Sort by volume (numeric sort if possible, but JSONB stores strings usually? No, volume is int in migration)
+    # PostgREST casting: order=metadata->>volume.asc doesn't numeric sort easily.
+    # We'll sort in Python.
+    result = await q.execute()
+    
+    books = result.data if result.data else []
+    
+    # Python sort by volume
+    def get_vol(b):
+        v = (b.get("metadata") or {}).get("volume")
+        return int(v) if v is not None else 999999
+        
+    return sorted(books, key=get_vol)
