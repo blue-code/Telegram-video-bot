@@ -89,12 +89,18 @@
     <div class="container">
         <nav class="top-nav">
             <a class="brand" href="/dashboard/{{ user_id }}">📚 TVB</a>
-            <a class="back-btn" href="/comics/{{ user_id }}">← 만화책 라이브러리</a>
+            <div style="display: flex; gap: 10px;">
+                <a class="back-btn" href="/comics/files/{{ user_id }}">📂 전체 파일 보기</a>
+                <a class="back-btn" href="/dashboard/{{ user_id }}">← 대시보드</a>
+            </div>
         </nav>
 
         <div class="page-header">
             <h1 class="page-title">📂 만화책 시리즈</h1>
             <p class="page-subtitle">{{ series_list|length }}개의 시리즈</p>
+            <button onclick="rescanSeries()" style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); padding: 8px 16px; color: #aaa; border-radius: 20px; cursor: pointer; margin-top: 10px; font-size: 12px;">
+                🔄 시리즈 재스캔
+            </button>
         </div>
 
         {% if series_list %}
@@ -124,5 +130,27 @@
         </div>
         {% endif %}
     </div>
+
+    <script>
+        async function rescanSeries() {
+            if (!confirm("모든 만화책 파일을 다시 스캔하여 시리즈를 재설정하시겠습니까? 시간이 걸릴 수 있습니다.")) return;
+            
+            try {
+                const response = await fetch('/api/comics/migrate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: {{ user_id }} })
+                });
+                const result = await response.json();
+                if (result.success) {
+                    alert("재스캔 작업이 시작되었습니다. 잠시 후 새로고침하세요.");
+                } else {
+                    alert("오류: " + result.message);
+                }
+            } catch (e) {
+                alert("네트워크 오류: " + e);
+            }
+        }
+    </script>
 </body>
 </html>

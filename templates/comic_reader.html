@@ -38,23 +38,34 @@
             transition: opacity 0.3s;
         }
 
-        /* Webtoon Mode Active Body State */
+        /* Webtoon Mode Active Body State - FORCE SCROLL */
+        html.webtoon-mode-active,
         body.webtoon-mode-active {
-            overflow-y: auto !important; /* Enable body scroll for webtoon mode */
+            margin: 0;
+            padding: 0;
+            overflow-y: auto !important; /* Force browser scroll */
             overflow-x: hidden;
+            height: auto !important; /* Remove 100vh limit */
             -webkit-overflow-scrolling: touch;
-            height: auto;
+        }
+        
+        body.webtoon-mode-active #viewer.webtoon-mode {
+            position: relative;
+            width: 100%;
+            height: auto !important;
+            overflow: visible !important;
+            min-height: 100vh;
+            background: #000;
+            z-index: 1;
         }
 
-        /* Webtoon Mode (Scroll-based) */
-        #viewer.webtoon-mode {
+        /* Ensure container takes full space */
+        body.webtoon-mode-active #webtoon-container {
+            display: flex;
+            flex-direction: column;
             width: 100%;
-            height: auto; /* Let content dictate height */
-            min-height: 100vh;
-            overflow: visible; /* Disable internal scrollbar */
-            background: #000;
-            position: relative;
-            z-index: 1;
+            height: auto;
+            overflow: visible;
         }
 
         #webtoon-container {
@@ -950,7 +961,11 @@
                 viewer.classList.remove('comic-mode');
                 viewer.classList.add('webtoon-mode');
                 
-                // 웹툰 모드: 스크롤을 위해 좌우 터치 존 숨김, 메뉴 존은 유지(상단)
+                // 웹툰 모드: HTML/Body 스크롤 활성화
+                document.documentElement.classList.add('webtoon-mode-active');
+                document.body.classList.add('webtoon-mode-active');
+                
+                // 좌우 터치 존 숨김
                 document.getElementById('prev-zone').style.display = 'none';
                 document.getElementById('next-zone').style.display = 'none';
                 
@@ -959,7 +974,11 @@
                 viewer.classList.remove('webtoon-mode');
                 viewer.classList.add('comic-mode');
                 
-                // 만화책 모드: 터치 존 복구
+                // 만화책 모드: HTML/Body 스크롤 잠금 (기본 CSS)
+                document.documentElement.classList.remove('webtoon-mode-active');
+                document.body.classList.remove('webtoon-mode-active');
+                
+                // 터치 존 복구
                 document.getElementById('prev-zone').style.display = 'block';
                 document.getElementById('next-zone').style.display = 'block';
                 
@@ -979,6 +998,14 @@
             if (mode === 'webtoon') {
                 viewer.classList.remove('comic-mode');
                 viewer.classList.add('webtoon-mode');
+                
+                // 페이지 로드 시에도 웹툰 모드면 Body 스크롤 활성화
+                document.documentElement.classList.add('webtoon-mode-active');
+                document.body.classList.add('webtoon-mode-active');
+                
+                // 터치 존 숨김
+                document.getElementById('prev-zone').style.display = 'none';
+                document.getElementById('next-zone').style.display = 'none';
             }
         }
 

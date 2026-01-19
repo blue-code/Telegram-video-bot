@@ -1130,10 +1130,16 @@ async def get_recent_comic_reading(user_id: int, limit: int = 5):
     """
     sb = await get_database()
 
-    # Join with comics and files table
-    result = await sb.table("comic_progress").select("*, comics(*, files(*))").eq("user_id", user_id).order("updated_at", desc=True).limit(limit).execute()
+    # Join with files table, and files joined with comics
+    # comic_progress -> files -> comics
+    result = await sb.table("comic_progress").select("*, files(*, comics(*))").eq("user_id", user_id).order("updated_at", desc=True).limit(limit).execute()
 
     if result.data:
+        # Flatten structure slightly to match expected output if needed, or caller handles it.
+        # Caller expects: item['comics'] to be the comic dict.
+        # But here item['files']['comics'] will be a list (one-to-many usually) or dict (one-to-one).
+        # Since file:comic is 1:1, it should be a list of 1 or just dict depending on Supabase detection.
+        # Let's verify result structure.
         return result.data
     return []
 

@@ -143,28 +143,28 @@
         </script>
 
         <div class="page-header">
-            <h1 class="page-title">📚 만화책 라이브러리</h1>
-            <p class="page-subtitle">총 {{ total_count }}권의 만화책</p>
+            <h1 class="page-title">📚 만화책 파일 목록</h1>
+            <p class="page-subtitle">총 {{ total_count }}권의 파일</p>
         </div>
 
-        <form class="search-bar" action="/comics/{{ user_id }}" method="GET">
+        <form class="search-bar" action="/comics/files/{{ user_id }}" method="GET">
             <input type="text" name="q" class="search-input"
                    placeholder="제목이나 시리즈명으로 검색..." value="{{ query }}">
             <button type="submit" class="search-btn">🔍</button>
         </form>
 
         <div class="filters">
-            <a href="/comics/{{ user_id }}?sort_by=latest" class="filter-btn {% if sort_by == 'latest' %}active{% endif %}">
+            <a href="/comics/files/{{ user_id }}?sort_by=latest" class="filter-btn {% if sort_by == 'latest' %}active{% endif %}">
                 최신순
             </a>
-            <a href="/comics/{{ user_id }}?sort_by=series" class="filter-btn {% if sort_by == 'series' %}active{% endif %}">
+            <a href="/comics/files/{{ user_id }}?sort_by=series" class="filter-btn {% if sort_by == 'series' %}active{% endif %}">
                 시리즈별
             </a>
-            <a href="/comics/{{ user_id }}?sort_by=title" class="filter-btn {% if sort_by == 'title' %}active{% endif %}">
+            <a href="/comics/files/{{ user_id }}?sort_by=title" class="filter-btn {% if sort_by == 'title' %}active{% endif %}">
                 제목순
             </a>
-            <a href="/comic_series/{{ user_id }}" class="filter-btn">
-                📂 시리즈 보기
+            <a href="/comics/{{ user_id }}" class="filter-btn" style="background: rgba(102, 126, 234, 0.5); font-weight: bold;">
+                🔙 시리즈 뷰로 이동
             </a>
         </div>
 

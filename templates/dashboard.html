@@ -314,6 +314,40 @@
         </div>
         {% endif %}
 
+        <!-- Continue Reading Comics -->
+        {% if recent_comics %}
+        <div class="section">
+            <div class="section-header">
+                <h2>📚 Continue Reading Comics</h2>
+                <a href="/comics/{{ user_id }}">View Library →</a>
+            </div>
+            <div class="video-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+                {% for comic in recent_comics %}
+                <a href="/comic_reader/{{ comic.file_id }}?user_id={{ user_id }}" style="text-decoration: none; color: inherit;">
+                    <div class="video-card" style="border-radius: 8px;">
+                        <div class="thumbnail" style="aspect-ratio: 2/3;">
+                            {% if comic.cover_url %}
+                            <img src="{{ comic.cover_url }}" alt="{{ comic.title }}">
+                            {% else %}
+                            📖
+                            {% endif %}
+                            <div class="duration" style="background: rgba(102, 126, 234, 0.9);">
+                                {{ comic.current_page + 1 }} / {{ comic.total_pages }}p
+                            </div>
+                        </div>
+                        <div class="info" style="padding: 8px;">
+                            <div class="title" style="font-size: 13px; margin-bottom: 4px;">{{ comic.title }}</div>
+                            <div class="meta" style="font-size: 11px;">
+                                <span>📅 {{ comic.updated_at }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </a>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
         <!-- Quick Actions -->
         <div class="section">
             <div class="section-header">
