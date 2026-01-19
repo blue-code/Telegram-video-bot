@@ -4186,3 +4186,19 @@ async def trigger_comic_migration(
         return {"success": False, "message": str(e)}
 
 
+@app.post("/api/epub/migrate")
+async def trigger_epub_migration(
+    background_tasks: BackgroundTasks,
+    user_id: int = Body(..., embed=True)
+):
+    """Trigger manual EPUB series migration"""
+    from src.epub_migration import migrate_epub_series
+    
+    try:
+        background_tasks.add_task(migrate_epub_series, user_id)
+        return {"success": True, "message": "EPUB series migration started in background."}
+    except Exception as e:
+        logger.error(f"Error triggering EPUB migration: {e}")
+        return {"success": False, "message": str(e)}
+
+
