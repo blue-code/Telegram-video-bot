@@ -301,8 +301,11 @@
         <div class="setting-group">
             <span class="setting-label">Text-to-Speech (음성 읽기)</span>
             <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                <button id="tts-play-pause" class="theme-btn" onclick="toggleTTSPlayPause()" style="flex: 1;">
+                <button id="tts-play-pause" class="theme-btn" onclick="toggleTTSPlayPause()" style="flex: 2;">
                     ▶ 읽기 시작
+                </button>
+                <button class="theme-btn" onclick="openTimerModal()" style="flex: 1; display: flex; align-items: center; justify-content: center; gap: 5px;">
+                    🕒 <span id="timer-display">Off</span>
                 </button>
             </div>
             <div id="tts-status" style="font-size: 11px; color: #888; margin-bottom: 8px; min-height: 16px;">
@@ -334,8 +337,21 @@
         </div>
     </div>
 
-    <div id="progress-bar-container"><div id="progress-bar"></div></div>
-    <div id="page-info"></div>
+    <!-- Timer Modal -->
+    <div id="timer-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 100; align-items: center; justify-content: center;">
+        <div style="background: #222; padding: 20px; border-radius: 12px; width: 80%; max-width: 300px; text-align: center;">
+            <h3 style="margin-top: 0; margin-bottom: 15px; color: #fff;">수면 타이머 설정</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                <button class="theme-btn" onclick="setTimer(15)">15분</button>
+                <button class="theme-btn" onclick="setTimer(30)">30분</button>
+                <button class="theme-btn" onclick="setTimer(45)">45분</button>
+                <button class="theme-btn" onclick="setTimer(60)">60분</button>
+                <button class="theme-btn" onclick="setTimer(90)">90분</button>
+                <button class="theme-btn" onclick="stopTimer()" style="background: #dc2626; border-color: #dc2626;">끄기</button>
+            </div>
+            <button class="theme-btn" onclick="closeTimerModal()" style="width: 100%; background: #444; border-color: #444;">취소</button>
+        </div>
+    </div>
 
     <script>
         const bookUrl = "{{ book_url }}";
@@ -1121,9 +1137,13 @@
                     return;
                 }
 
-                console.log(`🔮 Prefetching audio for next page (${nextPageText.length} chars)...`);
+                // Chunking logic for prefetch (only prefetch first chunk)
+                const chunks = splitTextIntoChunks(nextPageText, 900);
+                const firstChunk = chunks[0];
 
-                // Generate TTS audio
+                console.log(`🔮 Prefetching audio for next page (${nextPageText.length} chars, first chunk ${firstChunk.length} chars)...`);
+
+                // Generate TTS audio for first chunk
                 const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
                 const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
                 const pitchHz = Math.round((ttsCurrentPitch - 1.0) * 10);
@@ -1131,7 +1151,7 @@
                 const volumePercent = Math.round((ttsCurrentVolume - 1.0) * 100);
                 const volumeStr = (volumePercent >= 0 ? '+' : '') + volumePercent + '%';
 
-                const tts = new window.EdgeTTS(nextPageText, ttsCurrentVoice, {
+                const tts = new window.EdgeTTS(firstChunk, ttsCurrentVoice, {
                     rate: rateStr,
                     pitch: pitchStr,
                     volume: volumeStr
@@ -1143,7 +1163,8 @@
                 ttsPrefetchCache = {
                     text: nextPageText,
                     audioBlob: result.audio,
-                    wordBoundaries: result.subtitle
+                    wordBoundaries: result.subtitle,
+                    remainingChunks: chunks.slice(1)
                 };
 
                 console.log(`✅ Prefetch complete: ${result.audio.size} bytes cached`);
@@ -1164,7 +1185,7 @@
                 return;
             }
 
-            const { text: pageText, audioBlob, wordBoundaries } = ttsPrefetchCache;
+            const { text: pageText, audioBlob, wordBoundaries, remainingChunks } = ttsPrefetchCache;
             ttsPrefetchCache = null; // Clear cache after use
 
             console.log(`🚀 Playing prefetched audio (${pageText.length} chars, ${audioBlob.size} bytes)`);
@@ -1189,36 +1210,39 @@
                         highlightTextWithWordBoundaries();
                     }
 
-                    // Start prefetching next page audio in background
-                    prefetchNextPageTTS();
+                    // If this was the only chunk, start prefetching NEXT page
+                    // If there are remaining chunks, we prefetch during the last chunk loop in playChunks
+                    if (remainingChunks.length === 0) {
+                        prefetchNextPageTTS();
+                    }
                 };
 
                 ttsAudioElement.onended = () => {
                     console.log('Prefetched audio playback ended');
-
-                    // Clean up
                     URL.revokeObjectURL(audioUrl);
 
                     if (ttsPlaying) {
-                        // Auto-advance to next page
-                        updateTTSStatus('다음 페이지로 이동 중...');
-                        setTimeout(async () => {
-                            if (window.rendition) {
-                                await window.rendition.next();
+                        if (remainingChunks.length > 0) {
+                            // Play remaining chunks
+                            console.log(`🔄 Playing ${remainingChunks.length} remaining chunks...`);
+                            playChunks(remainingChunks, 0, pageText.length);
+                        } else {
+                            // Auto-advance to next page
+                            updateTTSStatus('다음 페이지로 이동 중...');
+                            setTimeout(async () => {
+                                if (window.rendition) {
+                                    await window.rendition.next();
 
-                                // Check if we have prefetched audio
-                                if (ttsPrefetchCache && ttsPlaying) {
-                                    console.log('🚀 Using prefetched audio (instant playback)');
-                                    playPrefetchedAudio();
-                                } else {
-                                    // Fallback to normal playback
-                                    console.log('🔄 No prefetch available, loading fresh...');
-                                    setTimeout(() => {
-                                        if (ttsPlaying) playCurrentPage();
-                                    }, 500);
+                                    if (ttsPrefetchCache && ttsPlaying) {
+                                        playPrefetchedAudio();
+                                    } else {
+                                        setTimeout(() => {
+                                            if (ttsPlaying) playCurrentPage();
+                                        }, 500);
+                                    }
                                 }
-                            }
-                        }, 300);
+                            }, 300);
+                        }
                     } else {
                         updateTTSStatus('읽기 완료');
                     }
@@ -1226,12 +1250,8 @@
 
                 ttsAudioElement.onerror = (event) => {
                     console.error('Prefetched audio error:', event);
-                    updateTTSStatus('오류: 오디오 재생 실패');
-                    ttsPlaying = false;
-                    const playPauseBtn = document.getElementById('tts-play-pause');
-                    playPauseBtn.textContent = '▶ 읽기 시작';
-                    playPauseBtn.classList.remove('playing');
-                    URL.revokeObjectURL(audioUrl);
+                    // Fallback to normal playback on error
+                    playCurrentPage();
                 };
 
                 // Start playback immediately
@@ -1245,144 +1265,155 @@
         }
 
         // Play TTS for current page using Edge TTS
+        // Supports chunking for long text and skipping empty pages
         async function playCurrentPage() {
-            // Wait a bit to ensure rendition layout is stable after fontSize changes
-            // This ensures currentLocation() returns accurate page boundaries
+            // Wait a bit to ensure rendition layout is stable
             await new Promise(resolve => setTimeout(resolve, 100));
 
             const pageText = await extractPageText();
 
-            if (!pageText) {
-                updateTTSStatus('페이지에 텍스트가 없습니다');
-                ttsPlaying = false;
-                document.getElementById('tts-play-pause').textContent = '▶ 읽기 시작';
-                document.getElementById('tts-play-pause').classList.remove('playing');
+            // Case 1: No text on page (Image only)
+            if (!pageText || pageText.trim().length === 0) {
+                console.log('⚠️ No text found on this page.');
+                
+                if (ttsPlaying) {
+                    updateTTSStatus('텍스트 없음, 다음 페이지로 이동...');
+                    // Add delay to prevent infinite fast loops
+                    setTimeout(async () => {
+                        if (window.rendition && ttsPlaying) {
+                            await window.rendition.next();
+                            // Recursive call for next page
+                            playCurrentPage();
+                        }
+                    }, 1000);
+                }
                 return;
             }
 
-            console.log(`Reading text (${pageText.length} chars):`, pageText.substring(0, 100) + '...');
-            updateTTSStatus('음성 생성 중...');
+            console.log(`Reading text (${pageText.length} chars):`, pageText.substring(0, 50) + '...');
+            
+            // Case 2: Text too long (> 1000 chars) -> Split into chunks
+            const chunks = splitTextIntoChunks(pageText, 900); // 900 chars safety limit
+            console.log(`📄 Split into ${chunks.length} chunks`);
+            
+            await playChunks(chunks, 0, pageText.length);
+        }
+
+        // Helper: Split text into safe chunks
+        function splitTextIntoChunks(text, maxLength) {
+            if (text.length <= maxLength) return [text];
+            
+            const chunks = [];
+            let currentChunk = '';
+            
+            // Split by sentence endings to avoid cutting mid-sentence
+            // Match sentence ending punctuation followed by space or end of string
+            const sentences = text.match(/[^.!?。！？\n]+[.!?。！？\n]+["']?|.+$/g) || [text];
+            
+            for (const sentence of sentences) {
+                if ((currentChunk + sentence).length > maxLength) {
+                    if (currentChunk) chunks.push(currentChunk);
+                    currentChunk = sentence;
+                } else {
+                    currentChunk += sentence;
+                }
+            }
+            if (currentChunk) chunks.push(currentChunk);
+            
+            return chunks;
+        }
+
+        // Play chunks sequentially
+        async function playChunks(chunks, index, totalLength) {
+            if (!ttsPlaying) return;
+            
+            if (index >= chunks.length) {
+                // All chunks finished -> Go to next page
+                console.log('✅ All chunks finished for this page');
+                
+                if (ttsPlaying) {
+                    updateTTSStatus('다음 페이지로 이동 중...');
+                    if (window.rendition) {
+                        await window.rendition.next();
+                        
+                        // Check prefetch
+                        if (ttsPrefetchCache && ttsPlaying) {
+                            console.log('🚀 Using prefetched audio');
+                            playPrefetchedAudio();
+                        } else {
+                            setTimeout(() => {
+                                if (ttsPlaying) playCurrentPage();
+                            }, 500);
+                        }
+                    }
+                }
+                return;
+            }
+
+            const chunkText = chunks[index];
+            updateTTSStatus(`음성 생성 중... (${index + 1}/${chunks.length})`);
 
             try {
+                // ... (Previous TTS API call logic) ...
                 // Calculate rate and pitch adjustments
                 const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
                 const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
-
-                // Edge TTS pitch uses Hz, convert from 0.5-2.0 to Hz
                 const pitchHz = Math.round((ttsCurrentPitch - 1.0) * 10);
                 const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
-
                 const volumePercent = Math.round((ttsCurrentVolume - 1.0) * 100);
                 const volumeStr = (volumePercent >= 0 ? '+' : '') + volumePercent + '%';
 
-                console.log('Edge TTS Settings:', {
-                    voice: ttsCurrentVoice,
+                const tts = new window.EdgeTTS(chunkText, ttsCurrentVoice, {
                     rate: rateStr,
                     pitch: pitchStr,
                     volume: volumeStr
                 });
 
-                // Create TTS instance
-                if (typeof window.EdgeTTS !== 'function') {
-                    throw new Error('EdgeTTS class not available');
-                }
-
-                const tts = new window.EdgeTTS(pageText, ttsCurrentVoice, {
-                    rate: rateStr,
-                    pitch: pitchStr,
-                    volume: volumeStr
-                });
-
-                // Synthesize speech
                 const result = await tts.synthesize();
 
-                if (!ttsPlaying) {
-                    console.log('TTS stopped before synthesis completed');
-                    return;
-                }
-
-                console.log(`✅ Edge TTS synthesis complete: ${result.audio.size} bytes, ${result.subtitle.length} word boundaries`);
-
-                // Store word boundaries for highlighting
-                ttsWordBoundaries = result.subtitle;
+                if (!ttsPlaying) return;
 
                 // Create audio element
                 const audioUrl = URL.createObjectURL(result.audio);
                 ttsAudioElement = new Audio(audioUrl);
                 ttsAudioElement.volume = ttsCurrentVolume;
+                
+                // Store boundaries for highlighting
+                // Note: Boundaries need offset adjustment for subsequent chunks if we want continuous highlighting
+                // But for simplicity, we just highlight current chunk's boundaries relative to start of audio
+                ttsWordBoundaries = result.subtitle;
 
-                // Audio event handlers
                 ttsAudioElement.onplay = () => {
-                    console.log('✅ Edge TTS playback started');
-                    updateTTSStatus(`읽는 중... (${pageText.length}자)`);
-
-                    // Start highlighting with word boundaries
+                    updateTTSStatus(`읽는 중... (${index + 1}/${chunks.length})`);
                     if (ttsWordBoundaries.length > 0) {
                         highlightTextWithWordBoundaries();
                     }
-
-                    // Start prefetching next page audio in background
-                    prefetchNextPageTTS();
-                };
-
-                ttsAudioElement.onended = () => {
-                    console.log('Edge TTS playback ended');
-
-                    // Clean up
-                    URL.revokeObjectURL(audioUrl);
-
-                    if (ttsPlaying) {
-                        // Auto-advance to next page
-                        updateTTSStatus('다음 페이지로 이동 중...');
-                        setTimeout(async () => {
-                            if (window.rendition) {
-                                await window.rendition.next();
-
-                                // Check if we have prefetched audio
-                                if (ttsPrefetchCache && ttsPlaying) {
-                                    console.log('🚀 Using prefetched audio (instant playback)');
-                                    playPrefetchedAudio();
-                                } else {
-                                    // Fallback to normal playback
-                                    console.log('🔄 No prefetch available, loading fresh...');
-                                    setTimeout(() => {
-                                        if (ttsPlaying) playCurrentPage();
-                                    }, 500);
-                                }
-                            }
-                        }, 300);
-                    } else {
-                        updateTTSStatus('읽기 완료');
+                    
+                    // Prefetch next page only during last chunk
+                    if (index === chunks.length - 1) {
+                        prefetchNextPageTTS();
                     }
                 };
 
-                ttsAudioElement.onerror = (event) => {
-                    console.error('Edge TTS audio error:', event);
-                    updateTTSStatus('오류: 오디오 재생 실패');
-                    ttsPlaying = false;
-                    const playPauseBtn = document.getElementById('tts-play-pause');
-                    playPauseBtn.textContent = '▶ 읽기 시작';
-                    playPauseBtn.classList.remove('playing');
+                ttsAudioElement.onended = () => {
                     URL.revokeObjectURL(audioUrl);
+                    // Play next chunk
+                    playChunks(chunks, index + 1, totalLength);
                 };
 
-                // Start playback
+                ttsAudioElement.onerror = (e) => {
+                    console.error('Audio play error:', e);
+                    // Try next chunk or stop? Try next.
+                    playChunks(chunks, index + 1, totalLength);
+                };
+
                 await ttsAudioElement.play();
 
             } catch (error) {
-                console.error('Edge TTS error:', error);
-
-                // Check for CORS error
-                if (error.message && error.message.includes('CORS')) {
-                    updateTTSStatus('⚠️ 네트워크 오류 (CORS). 백엔드 프록시가 필요할 수 있습니다.');
-                } else {
-                    updateTTSStatus('오류: ' + error.message);
-                }
-
-                ttsPlaying = false;
-                const playPauseBtn = document.getElementById('tts-play-pause');
-                playPauseBtn.textContent = '▶ 읽기 시작';
-                playPauseBtn.classList.remove('playing');
+                console.error('TTS Chunk Error:', error);
+                updateTTSStatus(`오류: ${error.message}`);
+                // Try next chunk
+                playChunks(chunks, index + 1, totalLength);
             }
         }
 
@@ -1512,6 +1543,89 @@
 
             // Save to localStorage
             saveSettings();
+        }
+
+        // ============= TTS TIMER =============
+        let ttsTimerInterval = null;
+        let ttsTimerEndTime = null;
+
+        function openTimerModal() {
+            document.getElementById('timer-modal').style.display = 'flex';
+        }
+
+        function closeTimerModal() {
+            document.getElementById('timer-modal').style.display = 'none';
+        }
+
+        function setTimer(minutes) {
+            closeTimerModal();
+            const now = Date.now();
+            ttsTimerEndTime = now + (minutes * 60 * 1000);
+            
+            if (ttsTimerInterval) clearInterval(ttsTimerInterval);
+            
+            updateTimerDisplay();
+            ttsTimerInterval = setInterval(checkTimer, 1000);
+            
+            showToast(`${minutes}분 후 종료됩니다`);
+        }
+
+        function stopTimer() {
+            closeTimerModal();
+            if (ttsTimerInterval) {
+                clearInterval(ttsTimerInterval);
+                ttsTimerInterval = null;
+            }
+            ttsTimerEndTime = null;
+            updateTimerDisplay();
+            showToast('타이머가 해제되었습니다');
+        }
+
+        function checkTimer() {
+            if (!ttsTimerEndTime) return;
+            
+            const now = Date.now();
+            if (now >= ttsTimerEndTime) {
+                // Timer finished
+                stopTimer(); // Clear interval
+                if (ttsPlaying) {
+                    stopTTS();
+                    updateTTSStatus('수면 타이머로 종료됨');
+                    // Optional: Close the app or dim screen? Just stop TTS for now.
+                }
+            } else {
+                updateTimerDisplay();
+            }
+        }
+
+        function updateTimerDisplay() {
+            const display = document.getElementById('timer-display');
+            if (ttsTimerEndTime) {
+                const remaining = Math.ceil((ttsTimerEndTime - Date.now()) / 1000);
+                const m = Math.floor(remaining / 60);
+                const s = remaining % 60;
+                display.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+                display.style.color = '#667eea';
+            } else {
+                display.textContent = 'Off';
+                display.style.color = 'inherit';
+            }
+        }
+        
+        function showToast(msg) {
+            // Re-use existing toast mechanism or create one
+            // reader.html doesn't seem to have a toast element defined in the CSS provided earlier
+            // I'll add one dynamically if needed
+            let toast = document.getElementById('toast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'toast';
+                toast.style.cssText = 'position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 20px; z-index: 1000; transition: opacity 0.3s; pointer-events: none; opacity: 0;';
+                document.body.appendChild(toast);
+            }
+            toast.textContent = msg;
+            toast.style.opacity = '1';
+            setTimeout(() => { toast.style.opacity = '0'; }, 3000);
         }
     </script>
 </body>

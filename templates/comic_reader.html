@@ -38,15 +38,23 @@
             transition: opacity 0.3s;
         }
 
+        /* Webtoon Mode Active Body State */
+        body.webtoon-mode-active {
+            overflow-y: auto !important; /* Enable body scroll for webtoon mode */
+            overflow-x: hidden;
+            -webkit-overflow-scrolling: touch;
+            height: auto;
+        }
+
         /* Webtoon Mode (Scroll-based) */
         #viewer.webtoon-mode {
             width: 100%;
-            height: 100%;
-            overflow-y: auto;
-            overflow-x: hidden;
+            height: auto; /* Let content dictate height */
+            min-height: 100vh;
+            overflow: visible; /* Disable internal scrollbar */
             background: #000;
             position: relative;
-            scroll-behavior: smooth;
+            z-index: 1;
         }
 
         #webtoon-container {
@@ -54,7 +62,7 @@
             flex-direction: column;
             align-items: center;
             padding: 0;
-            min-height: 100%;
+            width: 100%;
         }
 
         #viewer.webtoon-mode #webtoon-container {
@@ -63,15 +71,25 @@
 
         .webtoon-page {
             width: 100%;
-            max-width: 100%;
+            max-width: 800px; /* Limit max width for readability on large screens? Or 100%? User asked for seamless. */
+            /* User didn't ask for max width limitation, but usually webtoons are full width on mobile. */
+            /* Let's keep max-width: 100% effectively. */
+            max-width: 100%; 
             display: block;
             margin: 0;
+            padding: 0;
+            border: none;
+            font-size: 0; /* Remove whitespace gaps */
+            line-height: 0;
         }
 
         .webtoon-page img {
             width: 100%;
             height: auto;
             display: block;
+            border: none;
+            margin: 0;
+            padding: 0;
         }
 
         .webtoon-loading {
@@ -123,13 +141,21 @@
             display: block;
         }
 
-        #viewer.webtoon-mode .touch-zone {
-            display: none;
-        }
+        /* 
+           Note: .touch-zone is sibling of #viewer, not child.
+           The previous CSS selector #viewer.webtoon-mode .touch-zone was incorrect.
+           We will handle display in JS or use specific classes on body/container.
+        */
 
         #prev-zone { left: 0; width: 30%; }
         #next-zone { right: 0; width: 30%; }
-        #menu-zone { left: 30%; width: 40%; }
+        
+        /* Menu Zone - 상단 중앙으로 축소 (스크롤 방해 최소화) */
+        #menu-zone { 
+            left: 30%; width: 40%; 
+            top: 0; height: 20%; /* 상단 20% 영역만 터치 영역으로 설정 */
+            bottom: auto;
+        }
 
         /* Double-tap overlay */
         .double-tap-overlay {
@@ -627,8 +653,9 @@
             // Load initial batch of pages
             loadWebtoonPages(currentPage, Math.min(currentPage + 5, pageCount));
 
-            // Setup infinite scroll
-            viewer.addEventListener('scroll', handleWebtoonScroll);
+            // Setup infinite scroll (Window scroll for body)
+            window.removeEventListener('scroll', handleWebtoonScroll);
+            window.addEventListener('scroll', handleWebtoonScroll);
         }
 
         function loadWebtoonPages(startPage, endPage) {
@@ -642,6 +669,9 @@
                 const pageDiv = document.createElement('div');
                 pageDiv.className = 'webtoon-page';
                 pageDiv.dataset.page = i;
+                
+                // Add placeholder height to prevent scroll jank
+                pageDiv.style.minHeight = '200px'; 
 
                 const img = document.createElement('img');
                 img.dataset.src = `/api/comics/page/${fileId}/${i}`;
@@ -654,6 +684,10 @@
                         if (entry.isIntersecting) {
                             const img = entry.target;
                             img.src = img.dataset.src;
+                            // Remove min-height once loaded to fit content
+                            img.onload = () => {
+                                img.parentElement.style.minHeight = 'auto';
+                            };
                             observer.unobserve(img);
                         }
                     });
@@ -669,13 +703,16 @@
 
             // Add loading indicator at the end if more pages exist
             if (endPage < pageCount) {
+                // Remove existing loader first to move it to bottom
+                const existingLoader = document.getElementById('webtoon-end-loading');
+                if (existingLoader) existingLoader.remove();
+
                 const loadingDiv = document.createElement('div');
                 loadingDiv.className = 'webtoon-loading';
                 loadingDiv.id = 'webtoon-end-loading';
                 loadingDiv.textContent = '페이지 로딩 중...';
                 webtoonContainer.appendChild(loadingDiv);
             } else {
-                // End of comic - show next comic button
                 const endDiv = document.createElement('div');
                 endDiv.className = 'webtoon-loading';
                 endDiv.innerHTML = '<button onclick="navigateToNextComic()" style="padding: 15px 30px; background: #667eea; color: #fff; border: none; border-radius: 8px; font-size: 16px; cursor: pointer;">다음 만화책 →</button>';
@@ -686,36 +723,49 @@
         }
 
         function handleWebtoonScroll() {
-            const scrollTop = viewer.scrollTop;
-            const scrollHeight = viewer.scrollHeight;
-            const clientHeight = viewer.clientHeight;
+            // Use window scroll properties
+            const scrollTop = window.scrollY || document.documentElement.scrollTop;
+            const scrollHeight = document.documentElement.scrollHeight;
+            const clientHeight = window.innerHeight;
 
             // Update current page based on scroll position
             const pages = document.querySelectorAll('.webtoon-page');
-            pages.forEach((page, index) => {
-                const rect = page.getBoundingClientRect();
+            // Optimization: Only check visible pages or use IntersectionObserver for tracking current page?
+            // For now, iterate but optimize loop break?
+            // Let's keep existing logic but be mindful of performance
+            
+            // Find center-most page
+            let centerPage = null;
+            const viewCenter = scrollTop + (clientHeight / 2);
+            
+            for (const page of pages) {
+                const rect = page.getBoundingClientRect(); // Relative to viewport
+                // rect.top + scrollTop is absolute top.
+                // Simpler: Check if page covers center of viewport
                 if (rect.top <= clientHeight / 2 && rect.bottom >= clientHeight / 2) {
-                    webtoonCurrentPage = parseInt(page.dataset.page);
+                    centerPage = page;
+                    break; 
                 }
-            });
-
-            currentPage = webtoonCurrentPage;
-            updateProgress();
-
-            // Save progress periodically
-            clearTimeout(window.webtoonScrollTimeout);
-            window.webtoonScrollTimeout = setTimeout(() => {
-                saveProgress();
-            }, 1000);
+            }
+            
+            if (centerPage) {
+                webtoonCurrentPage = parseInt(centerPage.dataset.page);
+                if (webtoonCurrentPage !== currentPage) {
+                    currentPage = webtoonCurrentPage;
+                    updateProgress();
+                    
+                    // Save progress periodically (debounce)
+                    clearTimeout(window.webtoonScrollTimeout);
+                    window.webtoonScrollTimeout = setTimeout(() => {
+                        saveProgress();
+                    }, 1000);
+                }
+            }
 
             // Load more pages when near bottom
-            if (scrollHeight - scrollTop - clientHeight < 1000) {
+            if (scrollHeight - scrollTop - clientHeight < 1500) {
                 const lastLoadedPage = Math.max(...webtoonLoadedPages);
                 if (lastLoadedPage < pageCount - 1 && !webtoonLoading) {
-                    // Remove loading indicator
-                    const loadingDiv = document.getElementById('webtoon-end-loading');
-                    if (loadingDiv) loadingDiv.remove();
-
                     // Load next batch
                     loadWebtoonPages(lastLoadedPage + 1, Math.min(lastLoadedPage + 6, pageCount));
                 }
@@ -899,10 +949,20 @@
             if (newMode === 'webtoon') {
                 viewer.classList.remove('comic-mode');
                 viewer.classList.add('webtoon-mode');
+                
+                // 웹툰 모드: 스크롤을 위해 좌우 터치 존 숨김, 메뉴 존은 유지(상단)
+                document.getElementById('prev-zone').style.display = 'none';
+                document.getElementById('next-zone').style.display = 'none';
+                
                 initWebtoonMode();
             } else {
                 viewer.classList.remove('webtoon-mode');
                 viewer.classList.add('comic-mode');
+                
+                // 만화책 모드: 터치 존 복구
+                document.getElementById('prev-zone').style.display = 'block';
+                document.getElementById('next-zone').style.display = 'block';
+                
                 loadPage(currentPage);
             }
         }
