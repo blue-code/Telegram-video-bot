@@ -19,6 +19,7 @@
 - [x] Task: `books_series.html` 템플릿 수정 9b9c135
     - [x] **Red Phase**: 템플릿 렌더링 테스트 코드 작성 (단권일 때 `/books/read/` 링크가 생성되는지 검증) 9b9c135
     - [x] **Green Phase**: `templates/books_series.html`에서 `book_count == 1` 조건문 추가 및 `href` 속성 변경 9b9c135
+    - [x] **Fix**: 링크 URL 수정 (`/books/read` -> `/read`) 16de3db
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Frontend Template Update' (Protocol in workflow.md)
 
 ## Phase 3: Final Integration & Regression Testing
