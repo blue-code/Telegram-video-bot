@@ -69,6 +69,8 @@
         console.log('✅ EdgeTTS backend client loaded');
 
         // Singleton Audio Controller
+        // Manages audio playback state to prevent multiple audio streams from playing simultaneously.
+        // Ensures proper cleanup of resources and event listeners.
         class AudioController {
             constructor() {
                 if (AudioController.instance) return AudioController.instance;
@@ -786,7 +788,7 @@
 
         // Initialize Edge TTS
         function initializeTTS() {
-            console.log('✅ Edge TTS 초기화 시작 (백엔드)');
+            // console.log('✅ Edge TTS 초기화 시작 (백엔드)');
             updateDebugInfo('Init', 0, 'None');
             
             // Initialize AudioController
@@ -858,7 +860,9 @@
         }
 
         // Find the length of overlap between end of str1 and start of str2
-        // Returns the length of the overlap in str2
+        // Returns the length of the overlap in str2 (to be skipped)
+        // Uses brute-force suffix-prefix matching with whitespace normalization
+        // This is robust against minor formatting differences between pages
         function findOverlapLength(str1, str2) {
             if (!str1 || !str2) return 0;
             
