@@ -464,6 +464,7 @@
         let currentTheme = 'dark';
         let currentFontSize = 100;
         let isGeneratingLocations = false; // Flag to prevent saving during location generation
+        let isPageTurning = false; // NEW: Prevent TTS overlapping during transition
         const themes = {
             light: { body: { background: '#fff', color: '#000' } },
             sepia: { body: { background: '#f4ecd8', color: '#5b4636' } },
@@ -563,14 +564,37 @@
                 const nextZone = document.getElementById('next-zone');
                 const menuZone = document.getElementById('menu-zone');
 
-                prevZone.addEventListener('click', () => rendition.prev());
-                nextZone.addEventListener('click', () => rendition.next());
+                const navigateNext = async () => {
+                    if (isPageTurning) return;
+                    console.log('➡️ Navigating Next');
+                    isPageTurning = true;
+                    // If TTS is playing, we don't necessarily stop it here 
+                    // if it's an auto-advance, but for MANUAL click, we should.
+                    // But to be safe and "singleton", stopTTS() is best.
+                    if (!window.audioController?.isPlayingAutoAdvancing) {
+                         // stopTTS() will be called inside toggleTTS if we wanted to stop,
+                         // but for manual page turns, we want to stop current reading.
+                         if (ttsPlaying) stopTTS();
+                    }
+                    await rendition.next();
+                };
+
+                const navigatePrev = async () => {
+                    if (isPageTurning) return;
+                    console.log('⬅️ Navigating Prev');
+                    isPageTurning = true;
+                    if (ttsPlaying) stopTTS();
+                    await rendition.prev();
+                };
+
+                prevZone.addEventListener('click', navigatePrev);
+                nextZone.addEventListener('click', navigateNext);
                 menuZone.addEventListener('click', toggleMenu);
 
                 // Keyboard support
                 document.addEventListener('keyup', (e) => {
-                    if ((e.keyCode || e.which) == 37) rendition.prev();
-                    if ((e.keyCode || e.which) == 39) rendition.next();
+                    if ((e.keyCode || e.which) == 37) navigatePrev();
+                    if ((e.keyCode || e.which) == 39) navigateNext();
                 });
 
                 // Progress Tracking
@@ -579,6 +603,12 @@
                     const cfi = location.start.cfi;
 
                     console.log(`📍 Page relocated: ${(percent * 100).toFixed(1)}% ${isGeneratingLocations ? '(during location generation - not saving)' : ''}`);
+                    
+                    // NEW: If we were turning page, mark as done
+                    if (isPageTurning) {
+                        console.log('📄 Page transition complete');
+                        isPageTurning = false;
+                    }
 
                     // Update UI
                     if (document.getElementById('progress-bar')) {
@@ -1276,24 +1306,31 @@
                                 // Play remaining chunks
                                 console.log(`🔄 Playing ${remainingChunks.length} remaining chunks...`);
                                 playChunks(remainingChunks, 0, pageText.length);
-                            } else {
-                                // Auto-advance to next page
-                                updateTTSStatus('다음 페이지로 이동 중...');
-                                setTimeout(async () => {
-                                    if (window.rendition) {
-                                        await window.rendition.next();
-
-                                        if (ttsPrefetchCache && ttsPlaying) {
-                                            playPrefetchedAudio();
-                                        } else {
-                                            setTimeout(() => {
-                                                if (ttsPlaying) playCurrentPage();
-                                            }, 500);
-                                        }
-                                    }
-                                }, 300);
-                            }
-                        } else {
+                                                    } else {
+                                                        // Auto-advance to next page
+                                                        updateTTSStatus('다음 페이지로 이동 중...');
+                                                        setTimeout(async () => {
+                                                            if (window.rendition) {
+                                                                isPageTurning = true;
+                                                                await window.rendition.next();
+                            
+                                                                // Wait for relocation
+                                                                let waitCount = 0;
+                                                                while (isPageTurning && waitCount < 20) {
+                                                                    await new Promise(r => setTimeout(r, 100));
+                                                                    waitCount++;
+                                                                }
+                            
+                                                                if (ttsPrefetchCache && ttsPlaying) {
+                                                                    playPrefetchedAudio();
+                                                                } else {
+                                                                    setTimeout(() => {
+                                                                        if (ttsPlaying) playCurrentPage();
+                                                                    }, 500);
+                                                                }
+                                                            }
+                                                        }, 300);
+                                                    }                        } else {
                             updateTTSStatus('읽기 완료');
                         }
                     },
@@ -1383,8 +1420,17 @@
                 if (ttsPlaying) {
                     updateTTSStatus('다음 페이지로 이동 중...');
                     if (window.rendition) {
+                        isPageTurning = true;
                         await window.rendition.next();
                         
+                        // Wait for relocation event via a simple poll or just a safe delay
+                        // relocated event will clear isPageTurning
+                        let waitCount = 0;
+                        while (isPageTurning && waitCount < 20) {
+                            await new Promise(r => setTimeout(r, 100));
+                            waitCount++;
+                        }
+
                         // Check prefetch
                         if (ttsPrefetchCache && ttsPlaying) {
                             console.log('🚀 Using prefetched audio');

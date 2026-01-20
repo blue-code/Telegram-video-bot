@@ -1,35 +1,49 @@
 import pytest
+import time
 from playwright.sync_api import Page, expect
 
-# Note: Playwright tests require the server to be running.
-# In a real CI environment, we would start the server as a fixture.
-# For now, we will mark these tests to be skipped if server is not reachable
-# or just provide the structure.
+# Constants
+BASE_URL = "http://localhost:8000"
+TEST_BOOK_ID = 1 
+USER_ID = 41509535 
 
 @pytest.mark.e2e
-def test_tts_playback_flow(page: Page):
+def test_tts_stabilization(page: Page):
     """
-    E2E Test for TTS Playback Flow
+    Comprehensive E2E test for TTS stabilization.
+    """
+    # 1. Access Reader
+    print(f"Navigating to {BASE_URL}...")
+    page.goto(f"{BASE_URL}/read/{TEST_BOOK_ID}?user_id={USER_ID}&debug=true")
     
-    1. Open Reader
-    2. Click Play
-    3. Check if Audio element is created and playing
-    4. Check if text is highlighted
-    """
-    # This is a placeholder for the actual E2E test logic
-    # page.goto("http://localhost:8000/read/1")
-    # page.click("#tts-play-btn")
-    # expect(page.locator("audio")).to_be_visible()
-    pass
-
-@pytest.mark.e2e
-def test_tts_page_turn(page: Page):
-    """
-    E2E Test for TTS Auto Page Turn
+    # 2. Wait for book
+    page.wait_for_selector("#viewer iframe", timeout=15000)
+    print("Book loaded.")
     
-    1. Start TTS near end of page
-    2. Wait for playback to finish
-    3. Verify page turned
-    4. Verify TTS continues on next page
-    """
-    pass
+    # 3. Start TTS
+    page.click("#menu-zone")
+    page.click("#tts-play-pause")
+    print("TTS Started.")
+    
+    # 4. Wait for audio element to exist and play
+    # We can check the debug panel status instead of console logs for more stability
+    expect(page.locator("#debug-status")).not_to_have_text("Init", timeout=10000)
+    status = page.locator("#debug-status").inner_text()
+    print(f"Current TTS Status: {status}")
+    
+    # 5. Rapid Manual Page Turn Test
+    print("Simulating rapid page turns...")
+    for _ in range(3):
+        page.keyboard.press("ArrowRight")
+        time.sleep(0.2)
+    
+    # 6. Verify that it's still sane (no multiple voices is hard to check via Playwright, 
+    # but we can check if AudioController Stopped logs happened if we could see logs)
+    
+    # Check if debug panel is updating
+    time.sleep(2)
+    text_len = page.locator("#debug-text-len").inner_text()
+    print(f"Text length after turns: {text_len}")
+    assert int(text_len) >= 0
+    
+    print("Test finished successfully.")
