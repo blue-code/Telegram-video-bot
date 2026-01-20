@@ -9,10 +9,10 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [x] **Track: 만화책 메뉴의 기본 뷰를 시리즈로 변경해줘, 그리고 대시 보드에서 현재 읽고 있는 만화책도 표시해줘. 만화책의 시리즈로 구분하는 방식으로 이런 패턴도 추가해줘. "그거 그렇게 하는거 아닌데 9화.zip","그거 그렇게 하는거 아닌데 10화.zip" 기존에 이렇게 올라간 데이터를 마이그레이션 할 수 있는 프로그램도 만들어줘.**
+- [x] **Track: 만화�?메뉴??기본 뷰�? ?�리즈로 변경해�? 그리�??�??보드?�서 ?�재 ?�고 ?�는 만화책도 ?�시?�줘. 만화책의 ?�리즈로 구분?�는 방식?�로 ?�런 ?�턴??추�??�줘. "그거 그렇�??�는�??�닌??9??zip","그거 그렇�??�는�??�닌??10??zip" 기존???�렇�??�라�??�이?��? 마이그레?�션 ?????�는 ?�로그램??만들?�줘.**
 *Link: [./conductor/tracks/comix_series_view_20260117/](./conductor/tracks/comix_series_view_20260117/)*
 
 ---
 
-- [x] **Track: epub도 시리즈를 구별하여, 시리즈인 경우는 ebook메뉴에서 시리즈로 표시하고, 클릭하여 들어간 경우에만 전체 책이 나오도록 해줘. 그리고 이전 올라간 책도 재스캔 기능을 추가하여, 다시 정리 할 수 있도록 해줘.**
-*Link: [./conductor/tracks/epub_series_and_rescan_20260119/](./conductor/tracks/epub_series_and_rescan_20260119/)*
+- [x] **Track: epub???�리즈�? 구별?�여, ?�리즈인 경우??ebook메뉴?�서 ?�리즈로 ?�시?�고, ?�릭?�여 ?�어�?경우?�만 ?�체 책이 ?�오?�록 ?�줘. 그리�??�전 ?�라�?책도 ?�스�?기능??추�??�여, ?�시 ?�리 ?????�도�??�줘.**
+*Link: [./conductor/tracks/epub_series_and_rescan_20260119/](./conductor/tracks/epub_series_and_rescan_20260119/)*`n---`n`n- [x] **Track: ebook �޴��� �⺻�� �ø�����ε�, �̰��� 1�ǹۿ� ���� å�� �ø����� �����鼭 �� 1�ǻ��� �ø����� Ŭ���Ͽ� ���� å�� ���д´�. �̷� ��� �ٷ� å�� ���� �� �ֵ��� ������ �ʿ��ϴ�.**
