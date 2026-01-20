@@ -16,3 +16,4 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 - [x] **Track: epub???쒕━利덈? 援щ퀎?섏뿬, ?쒕━利덉씤 寃쎌슦??ebook硫붾돱?먯꽌 ?쒕━利덈줈 ?쒖떆?섍퀬, ?대┃?섏뿬 ?ㅼ뼱媛?寃쎌슦?먮쭔 ?꾩껜 梨낆씠 ?섏삤?꾨줉 ?댁쨾. 洹몃━怨??댁쟾 ?щ씪媛?梨낅룄 ?ъ뒪罹?湲곕뒫??異붽??섏뿬, ?ㅼ떆 ?뺣━ ?????덈룄濡??댁쨾.**
 *Link: [./conductor/tracks/epub_series_and_rescan_20260119/](./conductor/tracks/epub_series_and_rescan_20260119/)*`n---`n`n- [x] **Track: ebook 메뉴의 기본이 시리즈뷰인데, 이것이 1권밖에 없는 책도 시리즈뷰로 잡히면서 그 1권뿐인 시리즈뷰로 클릭하여 들어가면 책을 못읽는다. 이런 경우 바로 책을 읽을 수 있도록 수정이 필요하다.**
+
