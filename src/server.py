@@ -3767,6 +3767,8 @@ async def synthesize_tts(
             "size": len(audio_data)
         })
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"TTS synthesis error: {e}")
         raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
