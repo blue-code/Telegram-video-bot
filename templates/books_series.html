@@ -106,7 +106,7 @@
         {% if series_list %}
         <div class="series-grid">
             {% for series in series_list %}
-            <div class="series-card" onclick="window.location.href='/books/series/{{ user_id }}/{{ series.series|urlencode }}'">
+            <div class="series-card" onclick="{% if series.count == 1 and series.first_book_id %}window.location.href='/books/read/{{ series.first_book_id }}'{% else %}window.location.href='/books/series/{{ user_id }}/{{ series.series|urlencode }}'{% endif %}">
                 <div class="series-cover">
                     {% if series.cover_url %}
                         <img src="{{ series.cover_url }}" alt="{{ series.series }}" loading="lazy">

@@ -1287,7 +1287,8 @@ async def get_book_series(user_id: int):
                 "series": series_name,
                 "count": 0,
                 "cover_file_id": metadata.get("cover_file_id"),
-                "latest_update": f.get("created_at")
+                "latest_update": f.get("created_at"),
+                "first_book_id": f.get("id")
             }
             
         series_map[series_name]["count"] += 1
