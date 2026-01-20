@@ -838,6 +838,47 @@
             return endings.some(ending => trimmed.endsWith(ending));
         }
 
+        // Find the length of overlap between end of str1 and start of str2
+        // Returns the length of the overlap in str2
+        function findOverlapLength(str1, str2) {
+            if (!str1 || !str2) return 0;
+            
+            const normalize = (s) => s.replace(/\s+/g, '').trim();
+            const s1 = normalize(str1);
+            const s2 = normalize(str2);
+            
+            // Limit check to last 200 chars of s1 and first 200 of s2 to improve perf
+            const checkLen = Math.min(200, s1.length, s2.length);
+            const suffix = s1.substring(s1.length - checkLen);
+            const prefix = s2.substring(0, checkLen);
+            
+            // Brute force suffix-prefix matching from longest to shortest
+            for (let len = checkLen; len >= 10; len--) {
+                if (suffix.endsWith(prefix.substring(0, len))) {
+                    // Found match in normalized strings
+                    // Now map back to original str2 length
+                    // This is approximate but safer than exact match failures
+                    
+                    // Find this normalized segment in original str2
+                    const matchNorm = prefix.substring(0, len);
+                    let currentNorm = '';
+                    let originalLen = 0;
+                    
+                    for (let i = 0; i < str2.length; i++) {
+                        if (!/\s/.test(str2[i])) {
+                            currentNorm += str2[i];
+                        }
+                        originalLen++;
+                        if (currentNorm === matchNorm) {
+                            return originalLen;
+                        }
+                    }
+                }
+            }
+            
+            return 0;
+        }
+
         // Extract text from next page until sentence ends
         // Use searchAnchor (last 50 chars of current page) to find position in iframe
         async function getNextPageSentenceCompletion(searchAnchor) {
@@ -970,62 +1011,16 @@
 
                     // Check if we need to skip already-read text from previous page
                     if (ttsAlreadyReadText) {
-                        console.log(`📌 Checking for overlap with previous page (${ttsAlreadyReadText.length} chars)`);
-                        console.log(`   Previous page end: "${ttsAlreadyReadText.substring(ttsAlreadyReadText.length - 50)}"`);
-                        console.log(`   Current page start: "${rangeText.substring(0, 50)}"`);
-
-                        // Normalize whitespace helper (multiple spaces → single space)
-                        const normalizeText = (text) => text.replace(/\s+/g, ' ').trim();
-
-                        // Try progressively shorter searches: 50, 30, 20, 15, 10 chars
-                        const searchLengths = [50, 30, 20, 15, 10];
-                        let foundOverlap = false;
-
-                        for (const searchLen of searchLengths) {
-                            if (searchLen > ttsAlreadyReadText.length) continue;
-
-                            // Get search string from end of previous page
-                            const overlapSearch = ttsAlreadyReadText.substring(ttsAlreadyReadText.length - searchLen);
-
-                            // Try exact match first
-                            let overlapIndex = rangeText.indexOf(overlapSearch);
-
-                            // If not found, try normalized match
-                            if (overlapIndex === -1) {
-                                const normalizedSearch = normalizeText(overlapSearch);
-                                const normalizedCurr = normalizeText(rangeText);
-                                const normalizedIndex = normalizedCurr.indexOf(normalizedSearch);
-
-                                if (normalizedIndex !== -1) {
-                                    // Found in normalized text - find approximate position in original
-                                    // by counting non-whitespace chars
-                                    let charCount = 0;
-                                    overlapIndex = 0;
-                                    for (let i = 0; i < rangeText.length && charCount < normalizedIndex; i++) {
-                                        if (!/\s/.test(rangeText[i])) charCount++;
-                                        overlapIndex++;
-                                    }
-                                    console.log(`   Trying ${searchLen} chars (normalized): "${normalizedSearch.substring(0, 30)}..." → found at ~${overlapIndex}`);
-                                } else {
-                                    console.log(`   Trying ${searchLen} chars: "${overlapSearch.substring(0, 30)}..." → NOT FOUND`);
-                                }
-                            } else {
-                                console.log(`   Trying ${searchLen} chars: "${overlapSearch.substring(0, 30)}..." → found at ${overlapIndex}`);
-                            }
-
-                            if (overlapIndex !== -1) {
-                                // Found overlap! Skip to the end of the overlap
-                                const skipLength = overlapIndex + searchLen;
-                                console.log(`✂️ Found overlap (${searchLen} chars) at position ${overlapIndex}, skipping ${skipLength} chars`);
-                                rangeText = rangeText.substring(skipLength).trim();
-                                console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
-                                foundOverlap = true;
-                                break;
-                            }
-                        }
-
-                        if (!foundOverlap) {
-                            console.log(`⚠️ No overlap found with any search length. Reading from page start.`);
+                        console.log(`📌 Checking for overlap with previous page`);
+                        
+                        const overlapLen = findOverlapLength(ttsAlreadyReadText, rangeText);
+                        
+                        if (overlapLen > 0) {
+                            console.log(`✂️ Found overlap of ${overlapLen} chars. Skipping.`);
+                            rangeText = rangeText.substring(overlapLen).trim();
+                            console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
+                        } else {
+                            console.log(`⚠️ No overlap found. Reading from page start.`);
                         }
 
                         // Clear after use
