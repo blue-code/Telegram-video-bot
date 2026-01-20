@@ -64,7 +64,7 @@ class TestTemplatesRender(unittest.TestCase):
         
         # Check SingleBook link - Should be direct to reader
         # Note: The template likely uses Jinja2 logic to verify this.
-        self.assertIn("window.location.href='/books/read/101'", body)
+        self.assertIn("window.location.href='/read/101?user_id=123'", body)
         
         # Check MultiBook link - Should remain as series view
         self.assertIn("window.location.href='/books/series/123/MultiBook'", body)
