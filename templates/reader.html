@@ -425,6 +425,13 @@
         </div>
     </div>
 
+    <!-- Debug Panel -->
+    <div id="tts-debug" style="display: none; position: fixed; top: 0; left: 0; right: 0; background: rgba(0,0,0,0.8); color: #0f0; font-family: monospace; font-size: 10px; padding: 5px; z-index: 9999; pointer-events: none;">
+        <div>Status: <span id="debug-status">Init</span></div>
+        <div>Page Text Len: <span id="debug-text-len">0</span></div>
+        <div>Prefetch: <span id="debug-prefetch">None</span></div>
+    </div>
+
     <!-- Timer Modal -->
     <div id="timer-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 100; align-items: center; justify-content: center;">
         <div style="background: #222; padding: 20px; border-radius: 12px; width: 80%; max-width: 300px; text-align: center;">
@@ -766,9 +773,21 @@
             if (statusEl) statusEl.textContent = message;
         }
 
+        // Debug Helper
+        function updateDebugInfo(status, textLen, prefetch) {
+            const debugEl = document.getElementById('tts-debug');
+            if (window.location.search.includes('debug=true')) {
+                debugEl.style.display = 'block';
+            }
+            if (status) document.getElementById('debug-status').textContent = status;
+            if (textLen !== undefined) document.getElementById('debug-text-len').textContent = textLen;
+            if (prefetch) document.getElementById('debug-prefetch').textContent = prefetch;
+        }
+
         // Initialize Edge TTS
         function initializeTTS() {
             console.log('✅ Edge TTS 초기화 시작 (백엔드)');
+            updateDebugInfo('Init', 0, 'None');
             
             // Initialize AudioController
             window.audioController = new AudioController();
@@ -1193,6 +1212,7 @@
                     wordBoundaries: result.subtitle,
                     remainingChunks: chunks.slice(1)
                 };
+                updateDebugInfo(null, undefined, 'Cached');
 
                 console.log(`✅ Prefetch complete: ${result.audio.size} bytes cached`);
 
@@ -1214,6 +1234,7 @@
 
             const { text: pageText, audioBlob, wordBoundaries, remainingChunks } = ttsPrefetchCache;
             ttsPrefetchCache = null; // Clear cache after use
+            updateDebugInfo('Playing Prefetch', pageText.length, 'Used');
 
             console.log(`🚀 Playing prefetched audio (${pageText.length} chars, ${audioBlob.size} bytes)`);
             updateTTSStatus('읽는 중...');
@@ -1294,6 +1315,7 @@
             await new Promise(resolve => setTimeout(resolve, 100));
 
             const pageText = await extractPageText();
+            updateDebugInfo('Playing Page', pageText.length, ttsPrefetchCache ? 'Ready' : 'None');
 
             // Case 1: No text on page (Image only)
             if (!pageText || pageText.trim().length === 0) {
