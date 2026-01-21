@@ -1219,9 +1219,11 @@
         }
 
         // Extract text from current EPUB page using CFI Range (async)
-        // Use EPUB.js currentLocation() to get CFI range, then extract text from that range
+        // Returns: { cleanText, fullReadText }
+        //   - cleanText: Text to play (overlap removed)
+        //   - fullReadText: Complete text including sentence completion (for next page overlap detection)
         async function extractPageText() {
-            if (!window.rendition || !window.book) return '';
+            if (!window.rendition || !window.book) return { cleanText: '', fullReadText: '' };
 
             try {
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -1232,7 +1234,7 @@
 
                 if (!location || !location.start) {
                     console.warn('⚠️ No current location available');
-                    return '';
+                    return { cleanText: '', fullReadText: '' };
                 }
 
                 const startCFI = location.start.cfi;
@@ -1269,81 +1271,96 @@
                         }
                     }
 
-                    // Extract text from the Range
-                    let rangeText = startRange.toString().trim();
+                    // Extract RAW text from the Range (before overlap detection)
+                    let rawText = startRange.toString().trim();
 
-                    console.log(`✅ Extracted ${rangeText.length} chars from CFI Range`);
-                    console.log(`📝 Preview: "${rangeText.substring(0, 100)}..."`);
+                    console.log(`✅ Extracted ${rawText.length} chars from CFI Range (RAW)`);
+                    console.log(`📝 RAW Preview: "${rawText.substring(0, 100)}..."`);
 
-                    // CRITICAL: Only perform overlap detection in NORMAL mode (not during prefetch)
+                    // STEP 1: Overlap Detection (only in NORMAL mode)
+                    let cleanText = rawText;
+
                     if (!isPrefetchMode && ttsAlreadyReadText) {
                         console.log(`📌 [NORMAL MODE] Checking for overlap with previous page`);
-                        console.log(`   Previous text (last 50 chars): "${ttsAlreadyReadText.substring(Math.max(0, ttsAlreadyReadText.length - 50))}"`);
-                        console.log(`   Current text (first 50 chars): "${rangeText.substring(0, 50)}"`);
+                        console.log(`   Previous FULL text (last 50 chars): "${ttsAlreadyReadText.substring(Math.max(0, ttsAlreadyReadText.length - 50))}"`);
+                        console.log(`   Current RAW text (first 50 chars): "${rawText.substring(0, 50)}"`);
 
-                        const overlapLen = findOverlapLength(ttsAlreadyReadText, rangeText);
+                        const overlapLen = findOverlapLength(ttsAlreadyReadText, rawText);
 
                         if (overlapLen > 0) {
                             console.log(`✂️ Found overlap of ${overlapLen} chars. Skipping overlapped portion.`);
-                            const skippedText = rangeText.substring(0, overlapLen);
+                            const skippedText = rawText.substring(0, overlapLen);
                             console.log(`   Skipped text: "${skippedText.substring(0, 50)}..."`);
-                            rangeText = rangeText.substring(overlapLen).trim();
-                            console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
-                            console.log(`   New text starts with: "${rangeText.substring(0, 50)}"`);
+                            cleanText = rawText.substring(overlapLen).trim();
+                            console.log(`✅ After skipping overlap: ${cleanText.length} chars remaining (CLEAN)`);
+                            console.log(`   CLEAN text starts with: "${cleanText.substring(0, 50)}"`);
                         } else {
-                            console.log(`⚠️ No overlap found. Reading from page start.`);
+                            console.log(`⚠️ No overlap found. Using full RAW text as CLEAN.`);
                         }
 
                         // Clear after use (consumed)
                         ttsAlreadyReadText = null;
                         console.log(`🗑️ Cleared ttsAlreadyReadText after overlap check`);
                     } else if (isPrefetchMode) {
-                        console.log(`🔮 [PREFETCH MODE] Skipping overlap detection`);
+                        console.log(`🔮 [PREFETCH MODE] Skipping overlap detection - RAW text = CLEAN text`);
                     }
 
-                    // Check if text ends with complete sentence
-                    if (!endsWithSentence(rangeText)) {
-                        console.log('⚠️ Text does not end with sentence. Looking for completion...');
+                    // STEP 2: Sentence Completion (to get FULL READ TEXT)
+                    let fullReadText = cleanText;
 
-                        // Get the last 50 chars of current page to find position in iframe
-                        const searchAnchor = rangeText.substring(Math.max(0, rangeText.length - 50)).trim();
+                    if (!endsWithSentence(cleanText)) {
+                        console.log('⚠️ CLEAN text does not end with sentence. Looking for completion...');
+
+                        // Get the last 50 chars of clean text to find position in iframe
+                        const searchAnchor = cleanText.substring(Math.max(0, cleanText.length - 50)).trim();
 
                         // Get next page text to complete sentence
                         const nextPageText = await getNextPageSentenceCompletion(searchAnchor);
                         if (nextPageText) {
-                            rangeText += nextPageText;
-                            console.log(`✅ Completed sentence. Total: ${rangeText.length} chars`);
+                            fullReadText = cleanText + nextPageText;
+                            console.log(`✅ Completed sentence. FULL READ TEXT: ${fullReadText.length} chars`);
+                            console.log(`   Sentence completion: "${nextPageText.substring(0, 50)}..."`);
+                        } else {
+                            console.log(`⚠️ No sentence completion found. FULL = CLEAN`);
                         }
                     } else {
-                        console.log('✅ Text ends with complete sentence');
+                        console.log('✅ CLEAN text ends with complete sentence. FULL = CLEAN');
                     }
 
-                    // NOTE: DO NOT save ttsAlreadyReadText here!
-                    // It will be saved AFTER actual playback starts (in playChunks/playPrefetchedAudio)
-
-                    // Limit to 1200 chars (increased from 1000 to allow sentence completion)
-                    if (rangeText.length > 1200) {
-                        rangeText = rangeText.substring(0, 1200);
+                    // Limit to 1200 chars
+                    if (fullReadText.length > 1200) {
+                        fullReadText = fullReadText.substring(0, 1200);
 
                         // Truncate at sentence boundary
                         const endings = [
-                            rangeText.lastIndexOf('.'),
-                            rangeText.lastIndexOf('。'),
-                            rangeText.lastIndexOf('?'),
-                            rangeText.lastIndexOf('？'),
-                            rangeText.lastIndexOf('!'),
-                            rangeText.lastIndexOf('！')
+                            fullReadText.lastIndexOf('.'),
+                            fullReadText.lastIndexOf('。'),
+                            fullReadText.lastIndexOf('?'),
+                            fullReadText.lastIndexOf('？'),
+                            fullReadText.lastIndexOf('!'),
+                            fullReadText.lastIndexOf('！')
                         ];
                         const lastSentence = Math.max(...endings);
 
                         if (lastSentence > 500) {
-                            rangeText = rangeText.substring(0, lastSentence + 1);
-                            console.log(`✂️ Cut at sentence: ${rangeText.length} chars`);
+                            fullReadText = fullReadText.substring(0, lastSentence + 1);
+                            console.log(`✂️ Cut FULL text at sentence: ${fullReadText.length} chars`);
+                        }
+
+                        // Also cut cleanText if needed
+                        if (cleanText.length > fullReadText.length) {
+                            cleanText = fullReadText;
                         }
                     }
 
+                    console.log(`📊 Final result:`);
+                    console.log(`   CLEAN TEXT (for TTS): ${cleanText.length} chars`);
+                    console.log(`   FULL READ TEXT (for overlap): ${fullReadText.length} chars`);
+                    console.log(`   CLEAN preview: "${cleanText.substring(0, 100)}..."`);
+                    console.log(`   FULL preview: "${fullReadText.substring(0, 100)}..."`);
                     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                    return rangeText;
+
+                    return { cleanText, fullReadText };
 
                 } catch (rangeError) {
                     console.error('❌ Error getting Range from CFI:', rangeError);
@@ -1353,7 +1370,7 @@
 
             } catch (error) {
                 console.error('❌ Error extracting page text:', error);
-                return '';
+                return { cleanText: '', fullReadText: '' };
             }
         }
 
@@ -1365,7 +1382,7 @@
                 const iframe = document.querySelector('iframe');
                 if (!iframe || !iframe.contentDocument) {
                     console.warn('❌ Cannot access iframe content');
-                    return '';
+                    return { cleanText: '', fullReadText: '' };
                 }
 
                 const doc = iframe.contentDocument;
@@ -1395,14 +1412,16 @@
                     }
                 }
 
-                textContent = textContent.trim();
+                textContent = textContent.trim().substring(0, 1000);
 
                 console.log(`✅ Fallback extracted ${textContent.length} chars from ${elementCount} elements`);
-                return textContent.substring(0, 1000);
+
+                // For fallback, cleanText = fullReadText (no sentence completion)
+                return { cleanText: textContent, fullReadText: textContent };
 
             } catch (error) {
                 console.error('❌ Fallback extraction failed:', error);
-                return '';
+                return { cleanText: '', fullReadText: '' };
             }
         }
 
@@ -1450,6 +1469,14 @@
                 isPageTurning = true; // Prevent relocated handler from interfering
                 console.log('🔮 [PREFETCH] Set isPageTurning = true (suppress relocated)');
 
+                // VISUAL FIX: Hide iframe during prefetch to prevent flicker
+                const iframe = document.querySelector('iframe');
+                const originalVisibility = iframe ? iframe.style.visibility : null;
+                if (iframe) {
+                    iframe.style.visibility = 'hidden';
+                    console.log('🔮 [PREFETCH] Hidden iframe to prevent visual flicker');
+                }
+
                 // Temporarily go to next page
                 await window.rendition.next();
                 console.log('🔮 [PREFETCH] Navigated to next page');
@@ -1458,9 +1485,14 @@
                 await new Promise(resolve => setTimeout(resolve, 200));
 
                 // Extract next page text (isPrefetchMode = true, so NO overlap detection in extractPageText)
-                let nextPageText = await extractPageText();
-                console.log(`🔮 [PREFETCH] Extracted RAW text: ${nextPageText.length} chars`);
-                console.log(`   RAW text preview: "${nextPageText.substring(0, 100)}..."`);
+                const textResult = await extractPageText();
+                const nextPageCleanText = textResult.cleanText;
+                const nextPageFullText = textResult.fullReadText;
+
+                console.log(`🔮 [PREFETCH] Extracted text:`);
+                console.log(`   CLEAN: ${nextPageCleanText.length} chars`);
+                console.log(`   FULL: ${nextPageFullText.length} chars`);
+                console.log(`   CLEAN preview: "${nextPageCleanText.substring(0, 100)}..."`);
 
                 // CRITICAL: Return to current page with validation
                 console.log(`🔮 [PREFETCH] Returning to saved CFI: ${savedCFI.substring(0, 50)}...`);
@@ -1470,6 +1502,12 @@
 
                 // Wait for page to settle
                 await new Promise(resolve => setTimeout(resolve, 150));
+
+                // VISUAL FIX: Restore iframe visibility
+                if (iframe && originalVisibility !== null) {
+                    iframe.style.visibility = originalVisibility || '';
+                    console.log('🔮 [PREFETCH] Restored iframe visibility');
+                }
 
                 // VALIDATE restoration
                 const restoredLocation = window.rendition.currentLocation();
@@ -1482,36 +1520,45 @@
                     // Continue anyway - we tried our best
                 }
 
-                if (!nextPageText || nextPageText.length < 10) {
+                if (!nextPageCleanText || nextPageCleanText.length < 10) {
                     console.log('🔮 [PREFETCH] No text to prefetch on next page');
                     ttsPrefetchCache = null;
                     return;
                 }
 
-                // CRITICAL: Perform overlap detection HERE at prefetch time
+                // CRITICAL: Perform overlap detection HERE at prefetch time using FULL TEXT
+                let finalCleanText = nextPageCleanText;
+                let finalFullText = nextPageFullText;
+
                 if (currentPageTextForOverlap) {
                     console.log(`🔮 [PREFETCH] Performing overlap detection...`);
-                    console.log(`   Current page (last 50): "${currentPageTextForOverlap.substring(Math.max(0, currentPageTextForOverlap.length - 50))}"`);
-                    console.log(`   Next page (first 50): "${nextPageText.substring(0, 50)}"`);
+                    console.log(`   Current page FULL (last 50): "${currentPageTextForOverlap.substring(Math.max(0, currentPageTextForOverlap.length - 50))}"`);
+                    console.log(`   Next page CLEAN (first 50): "${nextPageCleanText.substring(0, 50)}"`);
 
-                    const overlapLen = findOverlapLength(currentPageTextForOverlap, nextPageText);
+                    const overlapLen = findOverlapLength(currentPageTextForOverlap, nextPageCleanText);
 
                     if (overlapLen > 0) {
                         console.log(`✂️ [PREFETCH] Found overlap: ${overlapLen} chars`);
-                        const skippedText = nextPageText.substring(0, overlapLen);
+                        const skippedText = nextPageCleanText.substring(0, overlapLen);
                         console.log(`   Skipped: "${skippedText.substring(0, 50)}..."`);
-                        nextPageText = nextPageText.substring(overlapLen).trim();
-                        console.log(`✅ [PREFETCH] After removing overlap: ${nextPageText.length} chars`);
-                        console.log(`   Clean text starts: "${nextPageText.substring(0, 50)}"`);
+
+                        // Remove overlap from both CLEAN and FULL text
+                        finalCleanText = nextPageCleanText.substring(overlapLen).trim();
+                        finalFullText = nextPageFullText.substring(overlapLen).trim();
+
+                        console.log(`✅ [PREFETCH] After removing overlap:`);
+                        console.log(`   Final CLEAN: ${finalCleanText.length} chars`);
+                        console.log(`   Final FULL: ${finalFullText.length} chars`);
+                        console.log(`   Final CLEAN starts: "${finalCleanText.substring(0, 50)}"`);
                     } else {
-                        console.log(`⚠️ [PREFETCH] No overlap found`);
+                        console.log(`⚠️ [PREFETCH] No overlap found - using original text`);
                     }
                 } else {
                     console.log(`🔮 [PREFETCH] No previous page text, skipping overlap detection`);
                 }
 
-                // Chunking logic for prefetch (only prefetch first chunk)
-                const chunks = splitTextIntoChunks(nextPageText, 900);
+                // Chunking logic for prefetch (only prefetch first chunk) using CLEAN TEXT
+                const chunks = splitTextIntoChunks(finalCleanText, 900);
                 const firstChunk = chunks[0];
 
                 console.log(`🔮 [PREFETCH] Generating audio for first chunk (${firstChunk.length} chars)...`);
@@ -1532,9 +1579,10 @@
 
                 const result = await tts.synthesize();
 
-                // Store in cache (text is ALREADY CLEAN, no overlap)
+                // Store in cache (overlap already removed)
                 ttsPrefetchCache = {
-                    text: nextPageText, // CLEAN TEXT (overlap removed)
+                    cleanText: finalCleanText, // CLEAN TEXT (overlap removed, for TTS playback)
+                    fullReadText: finalFullText, // FULL TEXT (for next page overlap detection)
                     audioBlob: result.audio,
                     wordBoundaries: result.subtitle,
                     remainingChunks: chunks.slice(1)
@@ -1542,7 +1590,8 @@
                 updateDebugInfo(null, undefined, 'Cached');
 
                 console.log(`✅ [PREFETCH] Complete: ${result.audio.size} bytes cached`);
-                console.log(`   Cached CLEAN text: "${nextPageText.substring(0, 100)}..."`);
+                console.log(`   Cached CLEAN text: ${finalCleanText.length} chars - "${finalCleanText.substring(0, 100)}..."`);
+                console.log(`   Cached FULL text: ${finalFullText.length} chars - "${finalFullText.substring(0, 100)}..."`);
 
                 // SUCCESS: Reset failure counter
                 prefetchFailureCount = 0;
@@ -1596,14 +1645,15 @@
                 return;
             }
 
-            const { text: pageText, audioBlob, wordBoundaries, remainingChunks } = ttsPrefetchCache;
+            const { cleanText, fullReadText, audioBlob, wordBoundaries, remainingChunks } = ttsPrefetchCache;
             ttsPrefetchCache = null; // Clear cache after use
-            updateDebugInfo('Playing Prefetch', pageText.length, 'Used');
+            updateDebugInfo('Playing Prefetch', cleanText.length, 'Used');
 
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log(`🚀 [PLAY PREFETCH] Starting playback for PREFETCHED page`);
-            console.log(`   Text: ${pageText.length} chars (ALREADY CLEAN - overlap removed at prefetch time)`);
-            console.log(`   Text preview: "${pageText.substring(0, 100)}..."`);
+            console.log(`   CLEAN text: ${cleanText.length} chars (for TTS playback)`);
+            console.log(`   FULL text: ${fullReadText.length} chars (for next overlap detection)`);
+            console.log(`   CLEAN preview: "${cleanText.substring(0, 100)}..."`);
             console.log(`   Audio: ${audioBlob.size} bytes`);
             console.log(`   Remaining chunks: ${remainingChunks.length}`);
             updateTTSStatus('읽는 중...');
@@ -1619,14 +1669,14 @@
                     // onPlay
                     () => {
                         console.log('✅ [PLAY PREFETCH] Audio playback started');
-                        updateTTSStatus(`읽는 중... (${pageText.length}자)`);
+                        updateTTSStatus(`읽는 중... (${cleanText.length}자)`);
 
-                        // CRITICAL: Save CLEAN text for overlap detection on NEXT page
-                        // This text is ALREADY CLEAN (overlap was removed during prefetch)
-                        ttsAlreadyReadText = pageText;
-                        console.log(`💾 [PLAY PREFETCH] Saved ttsAlreadyReadText (${pageText.length} chars) for next page overlap detection`);
-                        console.log(`   This is CLEAN text (overlap already removed at prefetch)`);
-                        console.log(`   Text: "${pageText.substring(0, 100)}..."`);
+                        // CRITICAL: Save FULL READ TEXT for overlap detection on NEXT page
+                        // This includes sentence completion from next page
+                        ttsAlreadyReadText = fullReadText;
+                        console.log(`💾 [PLAY PREFETCH] Saved ttsAlreadyReadText (${fullReadText.length} chars) for next page overlap detection`);
+                        console.log(`   This is FULL READ TEXT (includes sentence completion)`);
+                        console.log(`   FULL text: "${fullReadText.substring(0, 100)}..."`);
 
                         // Start highlighting with word boundaries
                         if (ttsWordBoundaries.length > 0) {
@@ -1647,7 +1697,7 @@
                             if (remainingChunks.length > 0) {
                                 // Play remaining chunks
                                 console.log(`🔄 [PLAY PREFETCH] Playing ${remainingChunks.length} remaining chunks...`);
-                                playChunks(remainingChunks, 0, pageText); // Pass FULL TEXT
+                                playChunks(remainingChunks, 0, cleanText, fullReadText); // Pass both texts
                             } else {
                                 // Auto-advance to next page
                                 updateTTSStatus('다음 페이지로 이동 중...');
@@ -1698,13 +1748,16 @@
             // Wait a bit to ensure rendition layout is stable
             await new Promise(resolve => setTimeout(resolve, 100));
 
-            const pageText = await extractPageText();
-            updateDebugInfo('Playing Page', pageText.length, ttsPrefetchCache ? 'Ready' : 'None');
+            const textResult = await extractPageText();
+            const cleanText = textResult.cleanText;
+            const fullReadText = textResult.fullReadText;
+
+            updateDebugInfo('Playing Page', cleanText.length, ttsPrefetchCache ? 'Ready' : 'None');
 
             // Case 1: No text on page (Image only)
-            if (!pageText || pageText.trim().length === 0) {
+            if (!cleanText || cleanText.trim().length === 0) {
                 console.log('⚠️ No text found on this page.');
-                
+
                 if (ttsPlaying) {
                     updateTTSStatus('텍스트 없음, 다음 페이지로 이동...');
                     // Add delay to prevent infinite fast loops
@@ -1721,14 +1774,15 @@
 
             console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
             console.log(`📖 [PLAY CURRENT] Starting playback for current page`);
-            console.log(`   Text: ${pageText.length} chars`);
-            console.log(`   Preview: "${pageText.substring(0, 100)}..."`);
+            console.log(`   CLEAN text: ${cleanText.length} chars (for TTS)`);
+            console.log(`   FULL text: ${fullReadText.length} chars (for overlap)`);
+            console.log(`   CLEAN preview: "${cleanText.substring(0, 100)}..."`);
 
             // Case 2: Text too long (> 1000 chars) -> Split into chunks
-            const chunks = splitTextIntoChunks(pageText, 900); // 900 chars safety limit
+            const chunks = splitTextIntoChunks(cleanText, 900); // 900 chars safety limit
             console.log(`📄 [PLAY CURRENT] Split into ${chunks.length} chunks`);
 
-            await playChunks(chunks, 0, pageText); // Pass FULL TEXT for overlap detection
+            await playChunks(chunks, 0, cleanText, fullReadText); // Pass both texts
         }
 
         // Helper: Split text into safe chunks
@@ -1756,8 +1810,9 @@
         }
 
         // Play chunks sequentially
-        // fullText: The complete text of the page (for overlap detection)
-        async function playChunks(chunks, index, fullText) {
+        // cleanText: Text to play (chunked from this)
+        // fullReadText: Complete text with sentence completion (for overlap detection)
+        async function playChunks(chunks, index, cleanText, fullReadText) {
             if (!ttsPlaying) return;
 
             if (index >= chunks.length) {
@@ -1826,11 +1881,12 @@
                         console.log(`▶️ [PLAY CHUNKS] Chunk ${index + 1}/${chunks.length} playback started`);
                         updateTTSStatus(`읽는 중... (${index + 1}/${chunks.length})`);
 
-                        // CRITICAL: Save FULL page text on FIRST chunk playback for overlap detection
+                        // CRITICAL: Save FULL READ TEXT on FIRST chunk playback for overlap detection
                         if (index === 0) {
-                            ttsAlreadyReadText = fullText;
-                            console.log(`💾 [PLAY CHUNKS] Saved ttsAlreadyReadText (${fullText.length} chars) for next page overlap detection`);
-                            console.log(`   Full text: "${fullText.substring(0, 100)}..."`);
+                            ttsAlreadyReadText = fullReadText;
+                            console.log(`💾 [PLAY CHUNKS] Saved ttsAlreadyReadText (${fullReadText.length} chars) for next page overlap detection`);
+                            console.log(`   This is FULL READ TEXT (includes sentence completion)`);
+                            console.log(`   FULL text: "${fullReadText.substring(0, 100)}..."`);
                         }
 
                         if (ttsWordBoundaries.length > 0) {
@@ -1846,13 +1902,13 @@
                     () => {
                         console.log(`⏹️ [PLAY CHUNKS] Chunk ${index + 1}/${chunks.length} playback ended`);
                         // Play next chunk
-                        playChunks(chunks, index + 1, fullText);
+                        playChunks(chunks, index + 1, cleanText, fullReadText);
                     },
                     // onError
                     (e) => {
                         console.error('❌ [PLAY CHUNKS] Audio play error:', e);
                         // Try next chunk
-                        playChunks(chunks, index + 1, fullText);
+                        playChunks(chunks, index + 1, cleanText, fullReadText);
                     }
                 );
 
@@ -1860,7 +1916,7 @@
                 console.error('❌ [PLAY CHUNKS] TTS Chunk Error:', error);
                 updateTTSStatus(`오류: ${error.message}`);
                 // Try next chunk
-                playChunks(chunks, index + 1, fullText);
+                playChunks(chunks, index + 1, cleanText, fullReadText);
             }
         }
 
