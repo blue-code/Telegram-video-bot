@@ -1709,12 +1709,13 @@
                                     if (ttsPrefetchInProgress) {
                                         console.log('⏳ [PLAY PREFETCH] Prefetch in progress, waiting for completion...');
                                         let waitCount = 0;
-                                        while (ttsPrefetchInProgress && waitCount < 30) { // Max 3 seconds
+                                        while (ttsPrefetchInProgress && waitCount < 100) { // Max 10 seconds (increased for slow TTS API)
                                             await new Promise(r => setTimeout(r, 100));
                                             waitCount++;
                                         }
                                         if (ttsPrefetchInProgress) {
-                                            console.warn('⚠️ [PLAY PREFETCH] Prefetch timeout after 3 seconds');
+                                            console.warn('⚠️ [PLAY PREFETCH] Prefetch timeout after 10 seconds - proceeding anyway');
+                                            console.warn('   TTS API might be slow. Check backend server.');
                                         } else {
                                             console.log('✅ [PLAY PREFETCH] Prefetch completed, proceeding with page transition');
                                         }
@@ -1842,12 +1843,13 @@
                     if (ttsPrefetchInProgress) {
                         console.log('⏳ [PLAY CHUNKS] Prefetch in progress, waiting for completion...');
                         let waitCount = 0;
-                        while (ttsPrefetchInProgress && waitCount < 30) { // Max 3 seconds
+                        while (ttsPrefetchInProgress && waitCount < 100) { // Max 10 seconds (increased for slow TTS API)
                             await new Promise(r => setTimeout(r, 100));
                             waitCount++;
                         }
                         if (ttsPrefetchInProgress) {
-                            console.warn('⚠️ [PLAY CHUNKS] Prefetch timeout after 3 seconds');
+                            console.warn('⚠️ [PLAY CHUNKS] Prefetch timeout after 10 seconds - proceeding anyway');
+                            console.warn('   TTS API might be slow. Check backend server.');
                         } else {
                             console.log('✅ [PLAY CHUNKS] Prefetch completed, proceeding with page transition');
                         }
