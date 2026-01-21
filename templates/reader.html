@@ -1306,10 +1306,11 @@
                     }
 
                     // STEP 2: Sentence Completion (to get FULL READ TEXT)
+                    // CRITICAL: Only perform sentence completion in NORMAL mode (not during prefetch)
                     let fullReadText = cleanText;
 
-                    if (!endsWithSentence(cleanText)) {
-                        console.log('⚠️ CLEAN text does not end with sentence. Looking for completion...');
+                    if (!isPrefetchMode && !endsWithSentence(cleanText)) {
+                        console.log('⚠️ [NORMAL MODE] CLEAN text does not end with sentence. Looking for completion...');
 
                         // Get the last 50 chars of clean text to find position in iframe
                         const searchAnchor = cleanText.substring(Math.max(0, cleanText.length - 50)).trim();
@@ -1323,6 +1324,8 @@
                         } else {
                             console.log(`⚠️ No sentence completion found. FULL = CLEAN`);
                         }
+                    } else if (isPrefetchMode) {
+                        console.log('🔮 [PREFETCH MODE] Skipping sentence completion - FULL = CLEAN');
                     } else {
                         console.log('✅ CLEAN text ends with complete sentence. FULL = CLEAN');
                     }
@@ -1702,6 +1705,21 @@
                                 // Auto-advance to next page
                                 updateTTSStatus('다음 페이지로 이동 중...');
                                 setTimeout(async () => {
+                                    // CRITICAL: Wait for prefetch to complete if in progress (prevent race condition)
+                                    if (ttsPrefetchInProgress) {
+                                        console.log('⏳ [PLAY PREFETCH] Prefetch in progress, waiting for completion...');
+                                        let waitCount = 0;
+                                        while (ttsPrefetchInProgress && waitCount < 30) { // Max 3 seconds
+                                            await new Promise(r => setTimeout(r, 100));
+                                            waitCount++;
+                                        }
+                                        if (ttsPrefetchInProgress) {
+                                            console.warn('⚠️ [PLAY PREFETCH] Prefetch timeout after 3 seconds');
+                                        } else {
+                                            console.log('✅ [PLAY PREFETCH] Prefetch completed, proceeding with page transition');
+                                        }
+                                    }
+
                                     if (window.rendition) {
                                         isPageTurning = true;
                                         await window.rendition.next();
@@ -1820,6 +1838,21 @@
                 console.log('✅ [PLAY CHUNKS] All chunks finished for this page');
 
                 if (ttsPlaying) {
+                    // CRITICAL: Wait for prefetch to complete if in progress (prevent race condition)
+                    if (ttsPrefetchInProgress) {
+                        console.log('⏳ [PLAY CHUNKS] Prefetch in progress, waiting for completion...');
+                        let waitCount = 0;
+                        while (ttsPrefetchInProgress && waitCount < 30) { // Max 3 seconds
+                            await new Promise(r => setTimeout(r, 100));
+                            waitCount++;
+                        }
+                        if (ttsPrefetchInProgress) {
+                            console.warn('⚠️ [PLAY CHUNKS] Prefetch timeout after 3 seconds');
+                        } else {
+                            console.log('✅ [PLAY CHUNKS] Prefetch completed, proceeding with page transition');
+                        }
+                    }
+
                     updateTTSStatus('다음 페이지로 이동 중...');
                     if (window.rendition) {
                         isPageTurning = true;
