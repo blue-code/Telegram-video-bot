@@ -782,11 +782,12 @@
         let ttsWordBoundaries = [];
         let currentHighlightedElement = null;
         let highlightTimeouts = [];
-        let ttsAlreadyReadText = null; // Text already read from next page (to skip on auto-advance)
+        let ttsAlreadyReadText = null; // Text already read from CURRENT page (for overlap detection)
 
         // TTS Prefetch Cache - preload next page audio for seamless playback
         let ttsPrefetchCache = null; // { text, audioBlob, wordBoundaries }
         let ttsPrefetchInProgress = false;
+        let isPrefetchMode = false; // Flag to prevent overlap detection during prefetch
 
         // Microsoft Edge Korean voices (fallback)
         // NOTE: As of 2025, Microsoft Edge TTS only supports 3 Korean voices
@@ -842,11 +843,91 @@
             console.log('✅ Edge TTS 초기화 완료');
         }
 
-        // ... (loadVoicesFromBackend, loadVoices, toggleTTSPlayPause omitted for brevity) ...
+        // Load voices from backend API
+        async function loadVoicesFromBackend() {
+            try {
+                console.log('📡 Fetching voices from backend...');
+                
+                // Add a timeout to the fetch request
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 3000);
+                
+                const response = await fetch('/api/tts/voices', { signal: controller.signal });
+                clearTimeout(timeoutId);
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.voices && data.voices.length > 0) {
+                        // Update global voices array
+                        window.edgeKoreanVoices = data.voices;
+                        console.log(`✅ ${data.voices.length}개 음성 로드됨 (백엔드)`);
+                    }
+                }
+            } catch (error) {
+                console.warn('❌ 음성 목록 로드 실패 (기본값 사용):', error);
+            } finally {
+                // ALWAYS call loadVoices to populate UI with whatever we have (fallbacks or backend data)
+                loadVoices();
+            }
+        }
+
+        // Load available voices into UI
+        function loadVoices() {
+            const voiceSelect = document.getElementById('tts-voice');
+            if (!voiceSelect) return;
+            
+            voiceSelect.innerHTML = '';
+
+            // Add Korean voices
+            const voices = window.edgeKoreanVoices || [];
+            voices.forEach((voice, index) => {
+                const option = document.createElement('option');
+                option.value = voice.name;
+                option.textContent = voice.label;
+
+                // Select saved voice or default to first
+                if (voice.name === ttsCurrentVoice) {
+                    option.selected = true;
+                } else if (index === 0 && !ttsCurrentVoice) {
+                    option.selected = true;
+                    ttsCurrentVoice = voice.name;
+                }
+
+                voiceSelect.appendChild(option);
+            });
+
+            if (voices.length === 0) {
+                const option = document.createElement('option');
+                option.textContent = '목소리 없음';
+                voiceSelect.appendChild(option);
+            }
+
+            console.log(`✅ ${voices.length}개 음성 UI 로드됨 (선택: ${ttsCurrentVoice})`);
+        }
+
+        // Toggle play/pause
+        async function toggleTTSPlayPause() {
+            const playPauseBtn = document.getElementById('tts-play-pause');
+            if (!playPauseBtn) return;
+
+            if (!ttsPlaying) {
+                // Start playing
+                playPauseBtn.textContent = '⏸ 일시정지';
+                playPauseBtn.classList.add('playing');
+                ttsPlaying = true;
+                await playCurrentPage();
+            } else {
+                // Pause/Stop
+                stopTTS();
+                playPauseBtn.textContent = '▶ 읽기 시작';
+                playPauseBtn.classList.remove('playing');
+                ttsPlaying = false;
+            }
+        }
 
         // Stop TTS playback
         function stopTTS() {
-            console.log('Stopping Edge TTS playback');
+            console.log('🛑 Stopping Edge TTS playback');
 
             // Stop audio via Controller
             if (window.audioController) {
@@ -878,8 +959,10 @@
             // Clear prefetch cache
             ttsPrefetchCache = null;
             ttsPrefetchInProgress = false;
+            isPrefetchMode = false;
 
             ttsPlaying = false;
+            console.log('✅ TTS stopped and state cleared');
         }
 
         // Check if text ends with sentence ending punctuation
@@ -1059,25 +1142,30 @@
                     console.log(`✅ Extracted ${rangeText.length} chars from CFI Range`);
                     console.log(`📝 Preview: "${rangeText.substring(0, 100)}..."`);
 
-                    // Save ORIGINAL page text before any modifications (for overlap detection on next page)
-                    const originalPageText = rangeText;
+                    // CRITICAL: Only perform overlap detection in NORMAL mode (not during prefetch)
+                    if (!isPrefetchMode && ttsAlreadyReadText) {
+                        console.log(`📌 [NORMAL MODE] Checking for overlap with previous page`);
+                        console.log(`   Previous text (last 50 chars): "${ttsAlreadyReadText.substring(Math.max(0, ttsAlreadyReadText.length - 50))}"`);
+                        console.log(`   Current text (first 50 chars): "${rangeText.substring(0, 50)}"`);
 
-                    // Check if we need to skip already-read text from previous page
-                    if (ttsAlreadyReadText) {
-                        console.log(`📌 Checking for overlap with previous page`);
-                        
                         const overlapLen = findOverlapLength(ttsAlreadyReadText, rangeText);
-                        
+
                         if (overlapLen > 0) {
-                            console.log(`✂️ Found overlap of ${overlapLen} chars. Skipping.`);
+                            console.log(`✂️ Found overlap of ${overlapLen} chars. Skipping overlapped portion.`);
+                            const skippedText = rangeText.substring(0, overlapLen);
+                            console.log(`   Skipped text: "${skippedText.substring(0, 50)}..."`);
                             rangeText = rangeText.substring(overlapLen).trim();
                             console.log(`✅ After skipping overlap: ${rangeText.length} chars remaining`);
+                            console.log(`   New text starts with: "${rangeText.substring(0, 50)}"`);
                         } else {
                             console.log(`⚠️ No overlap found. Reading from page start.`);
                         }
 
-                        // Clear after use
+                        // Clear after use (consumed)
                         ttsAlreadyReadText = null;
+                        console.log(`🗑️ Cleared ttsAlreadyReadText after overlap check`);
+                    } else if (isPrefetchMode) {
+                        console.log(`🔮 [PREFETCH MODE] Skipping overlap detection`);
                     }
 
                     // Check if text ends with complete sentence
@@ -1092,15 +1180,13 @@
                         if (nextPageText) {
                             rangeText += nextPageText;
                             console.log(`✅ Completed sentence. Total: ${rangeText.length} chars`);
-
-                            // Save FULL TEXT (after sentence completion) to detect overlap on next page
-                            // NOT originalPageText - we need the text AFTER completion!
-                            ttsAlreadyReadText = rangeText;
-                            console.log(`💾 Saved completed text (${ttsAlreadyReadText.length} chars) for overlap detection`);
                         }
                     } else {
                         console.log('✅ Text ends with complete sentence');
                     }
+
+                    // NOTE: DO NOT save ttsAlreadyReadText here!
+                    // It will be saved AFTER actual playback starts (in playChunks/playPrefetchedAudio)
 
                     // Limit to 1200 chars (increased from 1000 to allow sentence completion)
                     if (rangeText.length > 1200) {
@@ -1194,36 +1280,85 @@
             }
 
             ttsPrefetchInProgress = true;
-            console.log('🔮 Starting prefetch for next page...');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('🔮 [PREFETCH] Starting prefetch for next page...');
 
             try {
-                // Temporarily go to next page
+                // CRITICAL: Save current page text for overlap detection
+                const currentPageTextForOverlap = ttsAlreadyReadText;
+                console.log(`🔮 [PREFETCH] Current page text saved for overlap: ${currentPageTextForOverlap ? currentPageTextForOverlap.length : 0} chars`);
+
+                // CRITICAL: Set prefetch mode to prevent overlap detection in extractPageText()
+                isPrefetchMode = true;
+                console.log('🔮 [PREFETCH] Set isPrefetchMode = true');
+
+                // Save current page location
                 const currentLocation = window.rendition.currentLocation();
+                console.log(`🔮 [PREFETCH] Current CFI: ${currentLocation.start.cfi}`);
+
+                // Temporarily set flag to ignore relocated event during prefetch
+                const wasPageTurning = isPageTurning;
+                isPageTurning = true; // Prevent relocated handler from interfering
+                console.log('🔮 [PREFETCH] Set isPageTurning = true (suppress relocated)');
+
+                // Temporarily go to next page
                 await window.rendition.next();
+                console.log('🔮 [PREFETCH] Navigated to next page');
 
                 // Small delay to ensure layout is stable
-                await new Promise(resolve => setTimeout(resolve, 150));
+                await new Promise(resolve => setTimeout(resolve, 200));
 
-                // Extract next page text
-                const nextPageText = await extractPageText();
+                // Extract next page text (isPrefetchMode = true, so NO overlap detection in extractPageText)
+                let nextPageText = await extractPageText();
+                console.log(`🔮 [PREFETCH] Extracted RAW text: ${nextPageText.length} chars`);
+                console.log(`   RAW text preview: "${nextPageText.substring(0, 100)}..."`);
 
                 // Return to current page
+                console.log(`🔮 [PREFETCH] Returning to current page: ${currentLocation.start.cfi}`);
                 await window.rendition.display(currentLocation.start.cfi);
 
+                // Wait for page to settle
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                // Restore isPageTurning
+                isPageTurning = wasPageTurning;
+                console.log(`🔮 [PREFETCH] Restored isPageTurning = ${wasPageTurning}`);
+
                 if (!nextPageText || nextPageText.length < 10) {
-                    console.log('🔮 No text to prefetch on next page');
+                    console.log('🔮 [PREFETCH] No text to prefetch on next page');
                     ttsPrefetchCache = null;
-                    ttsPrefetchInProgress = false;
                     return;
+                }
+
+                // CRITICAL: Perform overlap detection HERE at prefetch time
+                if (currentPageTextForOverlap) {
+                    console.log(`🔮 [PREFETCH] Performing overlap detection...`);
+                    console.log(`   Current page (last 50): "${currentPageTextForOverlap.substring(Math.max(0, currentPageTextForOverlap.length - 50))}"`);
+                    console.log(`   Next page (first 50): "${nextPageText.substring(0, 50)}"`);
+
+                    const overlapLen = findOverlapLength(currentPageTextForOverlap, nextPageText);
+
+                    if (overlapLen > 0) {
+                        console.log(`✂️ [PREFETCH] Found overlap: ${overlapLen} chars`);
+                        const skippedText = nextPageText.substring(0, overlapLen);
+                        console.log(`   Skipped: "${skippedText.substring(0, 50)}..."`);
+                        nextPageText = nextPageText.substring(overlapLen).trim();
+                        console.log(`✅ [PREFETCH] After removing overlap: ${nextPageText.length} chars`);
+                        console.log(`   Clean text starts: "${nextPageText.substring(0, 50)}"`);
+                    } else {
+                        console.log(`⚠️ [PREFETCH] No overlap found`);
+                    }
+                } else {
+                    console.log(`🔮 [PREFETCH] No previous page text, skipping overlap detection`);
                 }
 
                 // Chunking logic for prefetch (only prefetch first chunk)
                 const chunks = splitTextIntoChunks(nextPageText, 900);
                 const firstChunk = chunks[0];
 
-                console.log(`🔮 Prefetching audio for next page (${nextPageText.length} chars, first chunk ${firstChunk.length} chars)...`);
+                console.log(`🔮 [PREFETCH] Generating audio for first chunk (${firstChunk.length} chars)...`);
 
-                // Generate TTS audio for first chunk
+                // Generate TTS audio for CLEAN TEXT (overlap already removed)
                 const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
                 const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
                 const pitchHz = Math.round((ttsCurrentPitch - 1.0) * 10);
@@ -1239,22 +1374,27 @@
 
                 const result = await tts.synthesize();
 
-                // Store in cache
+                // Store in cache (text is ALREADY CLEAN, no overlap)
                 ttsPrefetchCache = {
-                    text: nextPageText,
+                    text: nextPageText, // CLEAN TEXT (overlap removed)
                     audioBlob: result.audio,
                     wordBoundaries: result.subtitle,
                     remainingChunks: chunks.slice(1)
                 };
                 updateDebugInfo(null, undefined, 'Cached');
 
-                console.log(`✅ Prefetch complete: ${result.audio.size} bytes cached`);
+                console.log(`✅ [PREFETCH] Complete: ${result.audio.size} bytes cached`);
+                console.log(`   Cached CLEAN text: "${nextPageText.substring(0, 100)}..."`);
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
             } catch (error) {
-                console.warn('🔮 Prefetch failed (non-critical):', error.message);
+                console.warn('🔮 [PREFETCH] Failed (non-critical):', error.message);
                 ttsPrefetchCache = null;
             } finally {
+                // CRITICAL: Reset prefetch mode
+                isPrefetchMode = false;
                 ttsPrefetchInProgress = false;
+                console.log('🔮 [PREFETCH] Reset isPrefetchMode = false');
             }
         }
 
@@ -1270,7 +1410,12 @@
             ttsPrefetchCache = null; // Clear cache after use
             updateDebugInfo('Playing Prefetch', pageText.length, 'Used');
 
-            console.log(`🚀 Playing prefetched audio (${pageText.length} chars, ${audioBlob.size} bytes)`);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log(`🚀 [PLAY PREFETCH] Starting playback for PREFETCHED page`);
+            console.log(`   Text: ${pageText.length} chars (ALREADY CLEAN - overlap removed at prefetch time)`);
+            console.log(`   Text preview: "${pageText.substring(0, 100)}..."`);
+            console.log(`   Audio: ${audioBlob.size} bytes`);
+            console.log(`   Remaining chunks: ${remainingChunks.length}`);
             updateTTSStatus('읽는 중...');
 
             try {
@@ -1283,8 +1428,15 @@
                     ttsCurrentVolume,
                     // onPlay
                     () => {
-                        console.log('✅ Prefetched audio playback started');
+                        console.log('✅ [PLAY PREFETCH] Audio playback started');
                         updateTTSStatus(`읽는 중... (${pageText.length}자)`);
+
+                        // CRITICAL: Save CLEAN text for overlap detection on NEXT page
+                        // This text is ALREADY CLEAN (overlap was removed during prefetch)
+                        ttsAlreadyReadText = pageText;
+                        console.log(`💾 [PLAY PREFETCH] Saved ttsAlreadyReadText (${pageText.length} chars) for next page overlap detection`);
+                        console.log(`   This is CLEAN text (overlap already removed at prefetch)`);
+                        console.log(`   Text: "${pageText.substring(0, 100)}..."`);
 
                         // Start highlighting with word boundaries
                         if (ttsWordBoundaries.length > 0) {
@@ -1299,38 +1451,39 @@
                     },
                     // onEnded
                     () => {
-                        console.log('Prefetched audio playback ended');
+                        console.log('⏹️ [PLAY PREFETCH] Audio playback ended');
 
                         if (ttsPlaying) {
                             if (remainingChunks.length > 0) {
                                 // Play remaining chunks
-                                console.log(`🔄 Playing ${remainingChunks.length} remaining chunks...`);
-                                playChunks(remainingChunks, 0, pageText.length);
-                                                    } else {
-                                                        // Auto-advance to next page
-                                                        updateTTSStatus('다음 페이지로 이동 중...');
-                                                        setTimeout(async () => {
-                                                            if (window.rendition) {
-                                                                isPageTurning = true;
-                                                                await window.rendition.next();
-                            
-                                                                // Wait for relocation
-                                                                let waitCount = 0;
-                                                                while (isPageTurning && waitCount < 20) {
-                                                                    await new Promise(r => setTimeout(r, 100));
-                                                                    waitCount++;
-                                                                }
-                            
-                                                                if (ttsPrefetchCache && ttsPlaying) {
-                                                                    playPrefetchedAudio();
-                                                                } else {
-                                                                    setTimeout(() => {
-                                                                        if (ttsPlaying) playCurrentPage();
-                                                                    }, 500);
-                                                                }
-                                                            }
-                                                        }, 300);
-                                                    }                        } else {
+                                console.log(`🔄 [PLAY PREFETCH] Playing ${remainingChunks.length} remaining chunks...`);
+                                playChunks(remainingChunks, 0, pageText); // Pass FULL TEXT
+                            } else {
+                                // Auto-advance to next page
+                                updateTTSStatus('다음 페이지로 이동 중...');
+                                setTimeout(async () => {
+                                    if (window.rendition) {
+                                        isPageTurning = true;
+                                        await window.rendition.next();
+
+                                        // Wait for relocation
+                                        let waitCount = 0;
+                                        while (isPageTurning && waitCount < 20) {
+                                            await new Promise(r => setTimeout(r, 100));
+                                            waitCount++;
+                                        }
+
+                                        if (ttsPrefetchCache && ttsPlaying) {
+                                            playPrefetchedAudio();
+                                        } else {
+                                            setTimeout(() => {
+                                                if (ttsPlaying) playCurrentPage();
+                                            }, 500);
+                                        }
+                                    }
+                                }, 300);
+                            }
+                        } else {
                             updateTTSStatus('읽기 완료');
                         }
                     },
@@ -1376,13 +1529,16 @@
                 return;
             }
 
-            console.log(`Reading text (${pageText.length} chars):`, pageText.substring(0, 50) + '...');
-            
+            console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+            console.log(`📖 [PLAY CURRENT] Starting playback for current page`);
+            console.log(`   Text: ${pageText.length} chars`);
+            console.log(`   Preview: "${pageText.substring(0, 100)}..."`);
+
             // Case 2: Text too long (> 1000 chars) -> Split into chunks
             const chunks = splitTextIntoChunks(pageText, 900); // 900 chars safety limit
-            console.log(`📄 Split into ${chunks.length} chunks`);
-            
-            await playChunks(chunks, 0, pageText.length);
+            console.log(`📄 [PLAY CURRENT] Split into ${chunks.length} chunks`);
+
+            await playChunks(chunks, 0, pageText); // Pass FULL TEXT for overlap detection
         }
 
         // Helper: Split text into safe chunks
@@ -1410,19 +1566,20 @@
         }
 
         // Play chunks sequentially
-        async function playChunks(chunks, index, totalLength) {
+        // fullText: The complete text of the page (for overlap detection)
+        async function playChunks(chunks, index, fullText) {
             if (!ttsPlaying) return;
-            
+
             if (index >= chunks.length) {
                 // All chunks finished -> Go to next page
-                console.log('✅ All chunks finished for this page');
-                
+                console.log('✅ [PLAY CHUNKS] All chunks finished for this page');
+
                 if (ttsPlaying) {
                     updateTTSStatus('다음 페이지로 이동 중...');
                     if (window.rendition) {
                         isPageTurning = true;
                         await window.rendition.next();
-                        
+
                         // Wait for relocation event via a simple poll or just a safe delay
                         // relocated event will clear isPageTurning
                         let waitCount = 0;
@@ -1433,7 +1590,7 @@
 
                         // Check prefetch
                         if (ttsPrefetchCache && ttsPlaying) {
-                            console.log('🚀 Using prefetched audio');
+                            console.log('🚀 [PLAY CHUNKS] Using prefetched audio');
                             playPrefetchedAudio();
                         } else {
                             setTimeout(() => {
@@ -1446,10 +1603,10 @@
             }
 
             const chunkText = chunks[index];
+            console.log(`🎵 [PLAY CHUNKS] Playing chunk ${index + 1}/${chunks.length} (${chunkText.length} chars)`);
             updateTTSStatus(`음성 생성 중... (${index + 1}/${chunks.length})`);
 
             try {
-                // ... (Previous TTS API call logic) ...
                 // Calculate rate and pitch adjustments
                 const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
                 const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
@@ -1476,11 +1633,20 @@
                     ttsCurrentVolume,
                     // onPlay
                     () => {
+                        console.log(`▶️ [PLAY CHUNKS] Chunk ${index + 1}/${chunks.length} playback started`);
                         updateTTSStatus(`읽는 중... (${index + 1}/${chunks.length})`);
+
+                        // CRITICAL: Save FULL page text on FIRST chunk playback for overlap detection
+                        if (index === 0) {
+                            ttsAlreadyReadText = fullText;
+                            console.log(`💾 [PLAY CHUNKS] Saved ttsAlreadyReadText (${fullText.length} chars) for next page overlap detection`);
+                            console.log(`   Full text: "${fullText.substring(0, 100)}..."`);
+                        }
+
                         if (ttsWordBoundaries.length > 0) {
                             highlightTextWithWordBoundaries();
                         }
-                        
+
                         // Prefetch next page only during last chunk
                         if (index === chunks.length - 1) {
                             prefetchNextPageTTS();
@@ -1488,22 +1654,23 @@
                     },
                     // onEnded
                     () => {
+                        console.log(`⏹️ [PLAY CHUNKS] Chunk ${index + 1}/${chunks.length} playback ended`);
                         // Play next chunk
-                        playChunks(chunks, index + 1, totalLength);
+                        playChunks(chunks, index + 1, fullText);
                     },
                     // onError
                     (e) => {
-                        console.error('Audio play error:', e);
+                        console.error('❌ [PLAY CHUNKS] Audio play error:', e);
                         // Try next chunk
-                        playChunks(chunks, index + 1, totalLength);
+                        playChunks(chunks, index + 1, fullText);
                     }
                 );
 
             } catch (error) {
-                console.error('TTS Chunk Error:', error);
+                console.error('❌ [PLAY CHUNKS] TTS Chunk Error:', error);
                 updateTTSStatus(`오류: ${error.message}`);
                 // Try next chunk
-                playChunks(chunks, index + 1, totalLength);
+                playChunks(chunks, index + 1, fullText);
             }
         }
 
