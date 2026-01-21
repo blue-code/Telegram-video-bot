@@ -916,6 +916,8 @@
         let ttsPrefetchCache = null; // { text, audioBlob, wordBoundaries }
         let ttsPrefetchInProgress = false;
         let isPrefetchMode = false; // Flag to prevent overlap detection during prefetch
+        let prefetchFailureCount = 0; // Track consecutive failures for circuit breaker
+        const MAX_PREFETCH_FAILURES = 3; // Disable prefetch after 3 consecutive failures
 
         // Microsoft Edge Korean voices (fallback)
         // NOTE: As of 2025, Microsoft Edge TTS only supports 3 Korean voices
@@ -1089,8 +1091,11 @@
             ttsPrefetchInProgress = false;
             isPrefetchMode = false;
 
+            // Reset circuit breaker on manual stop
+            prefetchFailureCount = 0;
+
             ttsPlaying = false;
-            console.log('✅ TTS stopped and state cleared');
+            console.log('✅ TTS stopped and state cleared (circuit breaker reset)');
         }
 
         // Check if text ends with sentence ending punctuation
@@ -1407,25 +1412,41 @@
                 return;
             }
 
+            // Circuit Breaker: Disable prefetch after consecutive failures
+            if (prefetchFailureCount >= MAX_PREFETCH_FAILURES) {
+                console.warn(`⚠️ [PREFETCH] Circuit breaker OPEN - ${prefetchFailureCount} consecutive failures. Prefetch disabled.`);
+                return;
+            }
+
             ttsPrefetchInProgress = true;
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('🔮 [PREFETCH] Starting prefetch for next page...');
+            console.log(`   Circuit breaker: ${prefetchFailureCount}/${MAX_PREFETCH_FAILURES} failures`);
+
+            // STATE BACKUP for guaranteed restoration
+            const wasPageTurning = isPageTurning;
+            const wasPrefetchMode = isPrefetchMode;
+            let currentLocation = null;
+            let restorationAttempted = false;
 
             try {
                 // CRITICAL: Save current page text for overlap detection
                 const currentPageTextForOverlap = ttsAlreadyReadText;
                 console.log(`🔮 [PREFETCH] Current page text saved for overlap: ${currentPageTextForOverlap ? currentPageTextForOverlap.length : 0} chars`);
 
+                // CRITICAL: Save current page location BEFORE any navigation
+                currentLocation = window.rendition.currentLocation();
+                if (!currentLocation || !currentLocation.start || !currentLocation.start.cfi) {
+                    throw new Error('Cannot get current location - invalid state');
+                }
+                const savedCFI = currentLocation.start.cfi;
+                console.log(`🔮 [PREFETCH] Saved current CFI: ${savedCFI.substring(0, 50)}...`);
+
                 // CRITICAL: Set prefetch mode to prevent overlap detection in extractPageText()
                 isPrefetchMode = true;
                 console.log('🔮 [PREFETCH] Set isPrefetchMode = true');
 
-                // Save current page location
-                const currentLocation = window.rendition.currentLocation();
-                console.log(`🔮 [PREFETCH] Current CFI: ${currentLocation.start.cfi}`);
-
                 // Temporarily set flag to ignore relocated event during prefetch
-                const wasPageTurning = isPageTurning;
                 isPageTurning = true; // Prevent relocated handler from interfering
                 console.log('🔮 [PREFETCH] Set isPageTurning = true (suppress relocated)');
 
@@ -1441,16 +1462,25 @@
                 console.log(`🔮 [PREFETCH] Extracted RAW text: ${nextPageText.length} chars`);
                 console.log(`   RAW text preview: "${nextPageText.substring(0, 100)}..."`);
 
-                // Return to current page
-                console.log(`🔮 [PREFETCH] Returning to current page: ${currentLocation.start.cfi}`);
-                await window.rendition.display(currentLocation.start.cfi);
+                // CRITICAL: Return to current page with validation
+                console.log(`🔮 [PREFETCH] Returning to saved CFI: ${savedCFI.substring(0, 50)}...`);
+                restorationAttempted = true;
+
+                await window.rendition.display(savedCFI);
 
                 // Wait for page to settle
-                await new Promise(resolve => setTimeout(resolve, 100));
+                await new Promise(resolve => setTimeout(resolve, 150));
 
-                // Restore isPageTurning
-                isPageTurning = wasPageTurning;
-                console.log(`🔮 [PREFETCH] Restored isPageTurning = ${wasPageTurning}`);
+                // VALIDATE restoration
+                const restoredLocation = window.rendition.currentLocation();
+                if (restoredLocation && restoredLocation.start && restoredLocation.start.cfi === savedCFI) {
+                    console.log('✅ [PREFETCH] Page restoration validated');
+                } else {
+                    console.warn('⚠️ [PREFETCH] Page restoration validation failed - CFI mismatch');
+                    console.warn(`   Expected: ${savedCFI.substring(0, 50)}...`);
+                    console.warn(`   Got: ${restoredLocation?.start?.cfi?.substring(0, 50) || 'null'}...`);
+                    // Continue anyway - we tried our best
+                }
 
                 if (!nextPageText || nextPageText.length < 10) {
                     console.log('🔮 [PREFETCH] No text to prefetch on next page');
@@ -1513,16 +1543,48 @@
 
                 console.log(`✅ [PREFETCH] Complete: ${result.audio.size} bytes cached`);
                 console.log(`   Cached CLEAN text: "${nextPageText.substring(0, 100)}..."`);
+
+                // SUCCESS: Reset failure counter
+                prefetchFailureCount = 0;
+                console.log('✅ [PREFETCH] Circuit breaker RESET (success)');
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
             } catch (error) {
-                console.warn('🔮 [PREFETCH] Failed (non-critical):', error.message);
+                // FAILURE: Increment failure counter
+                prefetchFailureCount++;
+                console.error('❌ [PREFETCH] Failed:', error);
+                console.error(`   Circuit breaker: ${prefetchFailureCount}/${MAX_PREFETCH_FAILURES} failures`);
+                console.error(`   Error type: ${error.name}`);
+                console.error(`   Error message: ${error.message}`);
+                console.error(`   Restoration attempted: ${restorationAttempted}`);
+
                 ttsPrefetchCache = null;
+
+                // CRITICAL: If restoration was attempted but failed, try emergency recovery
+                if (restorationAttempted && currentLocation) {
+                    try {
+                        console.warn('🚨 [PREFETCH] Attempting emergency page restoration...');
+                        await window.rendition.display(currentLocation.start.cfi);
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                        console.warn('✅ [PREFETCH] Emergency restoration completed');
+                    } catch (emergencyError) {
+                        console.error('💀 [PREFETCH] Emergency restoration failed:', emergencyError.message);
+                        console.error('   User may need to manually navigate');
+                    }
+                }
+
             } finally {
-                // CRITICAL: Reset prefetch mode
-                isPrefetchMode = false;
+                // CRITICAL: ALWAYS restore ALL state flags in finally block
+                // This guarantees cleanup even if errors occur
+                isPrefetchMode = wasPrefetchMode;
+                isPageTurning = wasPageTurning;
                 ttsPrefetchInProgress = false;
-                console.log('🔮 [PREFETCH] Reset isPrefetchMode = false');
+
+                console.log('🔮 [PREFETCH] State restoration complete:');
+                console.log(`   isPrefetchMode: ${isPrefetchMode} (was: ${wasPrefetchMode})`);
+                console.log(`   isPageTurning: ${isPageTurning} (was: ${wasPageTurning})`);
+                console.log(`   ttsPrefetchInProgress: false`);
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             }
         }
 
