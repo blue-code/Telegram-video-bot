@@ -1733,9 +1733,10 @@
                                             waitCount++;
                                         }
                                         if (ttsPrefetchInProgress) {
-                                            console.warn('⚠️ [PLAY PREFETCH] Prefetch timeout after 10 seconds');
-                                            console.warn('   Invalidating prefetch cache and proceeding with page transition');
-                                            console.warn('   Next page will use fresh TTS generation (no prefetch)');
+                                            console.warn('🚨🚨🚨 [NEW CODE v2.0 PREFETCH] Timeout - 10 seconds 🚨🚨🚨');
+                                            console.warn('🔥 CACHE CLEARED! Using updated code! 🔥');
+                                            console.warn('💥 Invalidating prefetch cache 💥');
+                                            console.warn('✨ Fresh TTS generation ✨');
 
                                             // CRITICAL: Set abort flag to signal prefetch to stop
                                             ttsPrefetchAborted = true;
@@ -1884,9 +1885,10 @@
                             waitCount++;
                         }
                         if (ttsPrefetchInProgress) {
-                            console.warn('⚠️ [PLAY CHUNKS] Prefetch timeout after 10 seconds');
-                            console.warn('   Invalidating prefetch cache and proceeding with page transition');
-                            console.warn('   Next page will use fresh TTS generation (no prefetch)');
+                            console.warn('🚨🚨🚨 [NEW CODE v2.0] Prefetch timeout - 10 seconds elapsed 🚨🚨🚨');
+                            console.warn('🔥 CACHE CLEARED! Using updated code! 🔥');
+                            console.warn('💥 Invalidating prefetch cache and proceeding 💥');
+                            console.warn('✨ Next page will use fresh TTS generation ✨');
 
                             // CRITICAL: Set abort flag to signal prefetch to stop
                             ttsPrefetchAborted = true;
