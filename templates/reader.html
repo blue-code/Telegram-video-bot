@@ -915,6 +915,7 @@
         // TTS Prefetch Cache - preload next page audio for seamless playback
         let ttsPrefetchCache = null; // { text, audioBlob, wordBoundaries }
         let ttsPrefetchInProgress = false;
+        let ttsPrefetchAborted = false; // Flag to abort prefetch operation on timeout
         let isPrefetchMode = false; // Flag to prevent overlap detection during prefetch
         let prefetchFailureCount = 0; // Track consecutive failures for circuit breaker
         const MAX_PREFETCH_FAILURES = 3; // Disable prefetch after 3 consecutive failures
@@ -1441,6 +1442,7 @@
             }
 
             ttsPrefetchInProgress = true;
+            ttsPrefetchAborted = false; // Reset abort flag
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('🔮 [PREFETCH] Starting prefetch for next page...');
             console.log(`   Circuit breaker: ${prefetchFailureCount}/${MAX_PREFETCH_FAILURES} failures`);
@@ -1486,6 +1488,12 @@
 
                 // Small delay to ensure layout is stable
                 await new Promise(resolve => setTimeout(resolve, 200));
+
+                // CRITICAL: Check abort flag after navigation
+                if (ttsPrefetchAborted) {
+                    console.warn('🚫 [PREFETCH] Aborted after navigation - skipping text extraction');
+                    throw new Error('Prefetch aborted by timeout');
+                }
 
                 // Extract next page text (isPrefetchMode = true, so NO overlap detection in extractPageText)
                 const textResult = await extractPageText();
@@ -1566,6 +1574,12 @@
 
                 console.log(`🔮 [PREFETCH] Generating audio for first chunk (${firstChunk.length} chars)...`);
 
+                // CRITICAL: Check abort flag before expensive TTS API call
+                if (ttsPrefetchAborted) {
+                    console.warn('🚫 [PREFETCH] Aborted before TTS generation - skipping API call');
+                    throw new Error('Prefetch aborted by timeout');
+                }
+
                 // Generate TTS audio for CLEAN TEXT (overlap already removed)
                 const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
                 const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
@@ -1631,11 +1645,13 @@
                 isPrefetchMode = wasPrefetchMode;
                 isPageTurning = wasPageTurning;
                 ttsPrefetchInProgress = false;
+                ttsPrefetchAborted = false; // Reset abort flag
 
                 console.log('🔮 [PREFETCH] State restoration complete:');
                 console.log(`   isPrefetchMode: ${isPrefetchMode} (was: ${wasPrefetchMode})`);
                 console.log(`   isPageTurning: ${isPageTurning} (was: ${wasPageTurning})`);
                 console.log(`   ttsPrefetchInProgress: false`);
+                console.log(`   ttsPrefetchAborted: false`);
                 console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             }
         }
@@ -1714,8 +1730,25 @@
                                             waitCount++;
                                         }
                                         if (ttsPrefetchInProgress) {
-                                            console.warn('⚠️ [PLAY PREFETCH] Prefetch timeout after 10 seconds - proceeding anyway');
-                                            console.warn('   TTS API might be slow. Check backend server.');
+                                            console.warn('⚠️ [PLAY PREFETCH] Prefetch timeout after 10 seconds');
+                                            console.warn('   Invalidating prefetch cache and proceeding with page transition');
+                                            console.warn('   Next page will use fresh TTS generation (no prefetch)');
+
+                                            // CRITICAL: Set abort flag to signal prefetch to stop
+                                            ttsPrefetchAborted = true;
+
+                                            // CRITICAL: Invalidate prefetch cache to prevent using stale/wrong data
+                                            ttsPrefetchCache = null;
+
+                                            // CRITICAL: Force reset prefetch flag (even if prefetch still running)
+                                            // The prefetch function will clean up in its finally block
+                                            ttsPrefetchInProgress = false;
+
+                                            // CRITICAL: Verify current page position before transition
+                                            const currentCFI = window.rendition.currentLocation()?.start?.cfi;
+                                            if (currentCFI) {
+                                                console.log(`📍 [PLAY PREFETCH] Current page CFI before transition: ${currentCFI.substring(0, 50)}...`);
+                                            }
                                         } else {
                                             console.log('✅ [PLAY PREFETCH] Prefetch completed, proceeding with page transition');
                                         }
@@ -1848,8 +1881,25 @@
                             waitCount++;
                         }
                         if (ttsPrefetchInProgress) {
-                            console.warn('⚠️ [PLAY CHUNKS] Prefetch timeout after 10 seconds - proceeding anyway');
-                            console.warn('   TTS API might be slow. Check backend server.');
+                            console.warn('⚠️ [PLAY CHUNKS] Prefetch timeout after 10 seconds');
+                            console.warn('   Invalidating prefetch cache and proceeding with page transition');
+                            console.warn('   Next page will use fresh TTS generation (no prefetch)');
+
+                            // CRITICAL: Set abort flag to signal prefetch to stop
+                            ttsPrefetchAborted = true;
+
+                            // CRITICAL: Invalidate prefetch cache to prevent using stale/wrong data
+                            ttsPrefetchCache = null;
+
+                            // CRITICAL: Force reset prefetch flag (even if prefetch still running)
+                            // The prefetch function will clean up in its finally block
+                            ttsPrefetchInProgress = false;
+
+                            // CRITICAL: Verify current page position before transition
+                            const currentCFI = window.rendition.currentLocation()?.start?.cfi;
+                            if (currentCFI) {
+                                console.log(`📍 [PLAY CHUNKS] Current page CFI before transition: ${currentCFI.substring(0, 50)}...`);
+                            }
                         } else {
                             console.log('✅ [PLAY CHUNKS] Prefetch completed, proceeding with page transition');
                         }
