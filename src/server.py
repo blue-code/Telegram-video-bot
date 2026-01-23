@@ -2164,8 +2164,8 @@ async def reader_page(request: Request, file_id: int):
         # Download URL for the file (proxied)
         # We use the existing download/stream endpoint logic
         book_url = f"/api/files/download/{file_id}"
-        
-        return templates.TemplateResponse("reader.html", {
+
+        response = templates.TemplateResponse("reader.html", {
             "request": request,
             "file_id": file_id,
             "user_id": user_id,
@@ -2173,6 +2173,13 @@ async def reader_page(request: Request, file_id: int):
             "book_url": book_url,
             "initial_cfi": initial_cfi
         })
+
+        # CRITICAL: Force browser to never cache this page
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
+        return response
     except Exception as e:
         logger.error(f"Error loading reader: {e}")
         return templates.TemplateResponse("error.html", {
