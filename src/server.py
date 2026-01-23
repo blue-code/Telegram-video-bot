@@ -91,7 +91,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-templates = Jinja2Templates(directory="templates")
+# Configure Jinja2 with auto_reload and NO caching for development
+import jinja2
+jinja2_env = jinja2.Environment(
+    loader=jinja2.FileSystemLoader("templates"),
+    autoescape=True,
+    auto_reload=True,  # Force template reload on every request
+    cache_size=0  # Disable template caching completely
+)
+templates = Jinja2Templates(directory="templates", env=jinja2_env)
 
 # Create static directory if not exists and mount it
 Path("static").mkdir(exist_ok=True)
