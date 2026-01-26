@@ -8,83 +8,116 @@
             <link rel="stylesheet" href="/static/theme.css">
             <style>
                 .tvb-nav {
-                    background: var(--bg-glass);
-                    backdrop-filter: var(--blur-glass);
-                    -webkit-backdrop-filter: var(--blur-glass);
-                    padding: 12px 0;
-                    border-bottom: 1px solid var(--border-subtle);
+                    --nav-bg: linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(12, 74, 110, 0.88));
+                    --nav-accent: #f59e0b;
+                    --nav-ink: #f8fafc;
+                    --nav-ink-muted: rgba(248, 250, 252, 0.6);
+                    --nav-border: rgba(148, 163, 184, 0.2);
+                    font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo",
+                        "Malgun Gothic", "Nanum Gothic", sans-serif;
+                    background: var(--nav-bg);
+                    border-bottom: 1px solid var(--nav-border);
                     position: sticky;
                     top: 0;
                     z-index: 1000;
-                    margin-bottom: 30px;
+                    margin-bottom: 32px;
+                    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.35);
+                }
+
+                .tvb-nav::after {
+                    content: "";
+                    display: block;
+                    height: 3px;
+                    background: linear-gradient(90deg, var(--nav-accent), rgba(56, 189, 248, 0.2));
+                    opacity: 0.9;
                 }
 
                 .tvb-nav-container {
                     max-width: 1400px;
                     margin: 0 auto;
-                    padding: 0 20px;
+                    padding: 16px 24px;
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
+                    gap: 16px;
                 }
 
                 .tvb-nav-brand {
                     font-weight: 800;
-                    color: var(--text-primary);
+                    color: var(--nav-ink);
                     text-decoration: none;
                     font-size: 1.25rem;
-                    letter-spacing: -0.02em;
+                    letter-spacing: -0.03em;
                     display: flex;
                     align-items: center;
-                    gap: 8px;
+                    gap: 10px;
+                    text-transform: uppercase;
+                }
+
+                .tvb-nav-brand span {
+                    display: inline-flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 10px;
+                    background: rgba(245, 158, 11, 0.18);
+                    border: 1px solid rgba(245, 158, 11, 0.4);
                 }
 
                 .tvb-nav-toggle {
                     display: none;
-                    background: transparent;
-                    border: 1px solid var(--border-subtle);
-                    border-radius: var(--radius-sm);
-                    color: var(--text-primary);
-                    font-size: 1.5rem;
+                    background: rgba(15, 23, 42, 0.5);
+                    border: 1px solid var(--nav-border);
+                    border-radius: 10px;
+                    color: var(--nav-ink);
+                    font-size: 1.4rem;
                     cursor: pointer;
-                    padding: 4px 8px;
+                    padding: 6px 10px;
                     transition: all 0.2s;
                 }
 
                 .tvb-nav-toggle:hover {
-                    background: var(--bg-surface);
-                    border-color: var(--border-active);
+                    border-color: rgba(245, 158, 11, 0.6);
+                    transform: translateY(-1px);
                 }
 
                 .tvb-nav-links {
                     display: flex;
-                    gap: 4px;
+                    gap: 8px;
                     align-items: center;
+                    flex-wrap: wrap;
+                    justify-content: flex-end;
                 }
 
                 .tvb-nav-links a {
-                    color: var(--text-secondary);
+                    color: var(--nav-ink-muted);
                     text-decoration: none;
-                    font-size: 0.875rem;
-                    font-weight: 500;
-                    padding: 8px 12px;
-                    border-radius: var(--radius-full);
+                    font-size: 0.85rem;
+                    font-weight: 600;
+                    padding: 8px 14px;
+                    border-radius: 999px;
+                    border: 1px solid transparent;
                     transition: all 0.2s ease;
+                    background: rgba(15, 23, 42, 0.35);
                 }
 
                 .tvb-nav-links a:hover {
-                    color: var(--text-primary);
-                    background: rgba(255, 255, 255, 0.05);
+                    color: var(--nav-ink);
+                    border-color: rgba(245, 158, 11, 0.45);
+                    background: rgba(15, 23, 42, 0.6);
                 }
 
                 .tvb-nav-links a.active {
-                    color: var(--bg-app);
-                    background: var(--text-primary);
-                    font-weight: 600;
+                    color: #0f172a;
+                    background: var(--nav-accent);
+                    border-color: var(--nav-accent);
+                    font-weight: 700;
+                    box-shadow: 0 10px 24px rgba(245, 158, 11, 0.3);
                 }
 
-                /* 모바일 메뉴 (768px 이하) */
-                @media (max-width: 768px) {
+                /* 모바일 메뉴 (900px 이하) */
+                @media (max-width: 900px) {
                     .tvb-nav-toggle {
                         display: block;
                     }
@@ -96,10 +129,10 @@
                         left: 0;
                         right: 0;
                         flex-direction: column;
-                        background: var(--bg-app);
-                        border-bottom: 1px solid var(--border-subtle);
-                        padding: 16px;
-                        gap: 8px;
+                        background: rgba(15, 23, 42, 0.98);
+                        border-bottom: 1px solid var(--nav-border);
+                        padding: 20px;
+                        gap: 12px;
                         align-items: stretch;
                     }
 
@@ -110,27 +143,23 @@
                     .tvb-nav-links a {
                         text-align: center;
                         padding: 12px;
-                        border-radius: var(--radius-md);
-                        background: var(--bg-surface);
-                        border: 1px solid var(--border-subtle);
-                    }
-                    
-                    .tvb-nav-links a.active {
-                        background: var(--text-primary);
-                        color: var(--bg-app);
-                        border-color: var(--text-primary);
+                        border-radius: 14px;
+                        background: rgba(30, 41, 59, 0.7);
+                        border: 1px solid var(--nav-border);
                     }
                 }
             </style>
 
             <nav class="tvb-nav">
                 <div class="tvb-nav-container">
-                    <a class="tvb-nav-brand" href="/dashboard/${userId}">📚 TVB</a>
+                    <a class="tvb-nav-brand" href="/dashboard/${userId}">
+                        <span>📚</span> TVB
+                    </a>
                     <button class="tvb-nav-toggle" id="tvb-nav-toggle-btn" type="button">☰</button>
                     <div class="tvb-nav-links" id="tvb-nav-links">
                         <a href="/dashboard/${userId}" ${currentPage === 'dashboard' ? 'class="active"' : ''}>대시보드</a>
                         <a href="/gallery/${userId}" ${currentPage === 'gallery' ? 'class="active"' : ''}>갤러리</a>
-                        <a href="/favorites/${userId}" ${currentPage === 'favorites' ? 'class="active"' : ''}>⭐ 즐겨찾기</a>
+                        <a href="/favorites/${userId}" ${currentPage === 'favorites' ? 'class="active"' : ''}>즐겨찾기</a>
                         <a href="/encoded/${userId}" ${currentPage === 'encoded' ? 'class="active"' : ''}>인코딩됨</a>
                         <a href="/books/${userId}" ${currentPage === 'books' ? 'class="active"' : ''}>eBook</a>
                         <a href="/comics/${userId}" ${currentPage === 'comics' ? 'class="active"' : ''}>만화책</a>
