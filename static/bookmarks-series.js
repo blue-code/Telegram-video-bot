@@ -224,7 +224,19 @@ async function removeFromSeries(seriesId, fileId) {
 function getUserIdFromPage() {
     // Extract user_id from current URL or page context
     const urlParams = new URLSearchParams(window.location.search);
-    return urlParams.get('user_id') || window.DEFAULT_USER_ID || '41509535';
+    const candidates = [
+        urlParams.get('user_id'),
+        window.userId,
+        window.DEFAULT_USER_ID
+    ];
+    for (const candidate of candidates) {
+        if (candidate === null || candidate === undefined) continue;
+        const parsed = parseInt(candidate, 10);
+        if (!Number.isNaN(parsed)) {
+            return parsed;
+        }
+    }
+    return 41509535;
 }
 
 function showSeriesSelectionModal(fileId, contentType) {

@@ -491,10 +491,10 @@
     <div class="settings-panel" id="settings">
         <!-- Settings Header with TOC Button -->
         <div class="settings-header">
-            <button onclick="toggleSettings()">⚙️ 설정화면</button>
             <button onclick="openTOC()">📚 목차</button>
             <button onclick="openTimerModal()">🕒 <span id="timer-display">타이머</span></button>
             <button onclick="toggleEpubBookmarksPanel()">📑 북마크</button>
+            <button onclick="addEpubBookmarkClick()">➕ 북마크 등록</button>
         </div>
 
         <div class="setting-group">
@@ -515,14 +515,16 @@
         </div>
         <div class="setting-group">
             <span class="setting-label">Font Family</span>
-            <select onchange="setFont(this.value)">
-                <option value="'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">프리텐다드</option>
-                <option value="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">Noto Sans KR</option>
-                <option value="'Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">시스템 고딕</option>
-                <option value="'Nanum Gothic','Malgun Gothic',sans-serif">나눔고딕</option>
-                <option value="'Spoqa Han Sans Neo','Malgun Gothic','Nanum Gothic',sans-serif">스포카 한 산스</option>
+            <select id="font-family-select" onchange="setFont(this.value)">
+                <option value="'Malgun Gothic','Apple SD Gothic Neo','Gulim','Dotum',sans-serif">맑은 고딕</option>
+                <option value="'Apple SD Gothic Neo','Malgun Gothic','Gulim','Dotum',sans-serif">애플 SD 고딕</option>
+                <option value="'Gulim','Malgun Gothic','Dotum',sans-serif">굴림</option>
+                <option value="'Dotum','Malgun Gothic','Gulim',sans-serif">돋움</option>
+                <option value="'Nanum Gothic','Malgun Gothic','Gulim',sans-serif">나눔고딕</option>
+                <option value="'Noto Sans KR','Malgun Gothic','Gulim',sans-serif">Noto Sans KR</option>
+                <option value="'Batang','Nanum Myeongjo',serif">바탕</option>
+                <option value="'Nanum Myeongjo','Batang',serif">나눔명조</option>
                 <option value="'Noto Serif KR','Nanum Myeongjo',serif">Noto Serif KR</option>
-                <option value="'Nanum Myeongjo',serif">나눔명조</option>
             </select>
         </div>
 
@@ -615,12 +617,16 @@
         const initialCfi = (initialCfiStr && initialCfiStr !== "None" && initialCfiStr !== "null") ? initialCfiStr : undefined;
         const fileId = {{ file_id }};
         const userId = {{ user_id }};
+        window.userId = userId;
+        window.DEFAULT_USER_ID = userId;
 
         console.log(`📚 Reader initialized - File ID: ${fileId}, User ID: ${userId}`);
         console.log(`📖 Initial CFI: ${initialCfi ? initialCfi.substring(0, 50) + '...' : 'None (starting from beginning)'}`);
 
         // State
         let currentTheme = 'dark';
+        const DEFAULT_FONT_FAMILY = "'Malgun Gothic','Apple SD Gothic Neo','Gulim','Dotum',sans-serif";
+        let currentFontFamily = DEFAULT_FONT_FAMILY;
         let currentFontSize = 100;
         let isGeneratingLocations = false; // Flag to prevent saving during location generation
         let isPageTurning = false; // NEW: Prevent TTS overlapping during transition
@@ -639,6 +645,7 @@
                 savedSettings = JSON.parse(saved);
                 if (savedSettings.theme) currentTheme = savedSettings.theme;
                 if (savedSettings.fontSize) currentFontSize = savedSettings.fontSize;
+                if (savedSettings.fontFamily) currentFontFamily = savedSettings.fontFamily;
                 console.log('📥 Pre-loaded settings:', savedSettings);
             }
         } catch (e) {
@@ -717,6 +724,24 @@
                 rendition.themes.register("light", themes.light);
                 rendition.themes.register("sepia", themes.sepia);
                 rendition.themes.register("dark", themes.dark);
+
+                // Ensure font override is applied to every rendered section
+                rendition.on('rendered', (_section, contents) => {
+                    if (!contents || !currentFontFamily) return;
+                    try {
+                        const doc = contents.document;
+                        const styleId = 'tts-font-override';
+                        let styleEl = doc.getElementById(styleId);
+                        if (!styleEl) {
+                            styleEl = doc.createElement('style');
+                            styleEl.id = styleId;
+                            doc.head.appendChild(styleEl);
+                        }
+                        styleEl.textContent = `* { font-family: ${currentFontFamily} !important; }`;
+                    } catch (e) {
+                        console.error('Font apply error:', e);
+                    }
+                });
 
                 // Navigation
                 const prevZone = document.getElementById('prev-zone');
@@ -818,6 +843,7 @@
                     // Apply reader settings
                     if (settings.theme) currentTheme = settings.theme;
                     if (settings.fontSize) currentFontSize = settings.fontSize;
+                    if (settings.fontFamily) currentFontFamily = settings.fontFamily;
 
                     // Apply TTS settings
                     if (settings.ttsVoice) ttsCurrentVoice = settings.ttsVoice;
@@ -839,6 +865,7 @@
                 const settings = {
                     theme: currentTheme,
                     fontSize: currentFontSize,
+                    fontFamily: currentFontFamily,
                     ttsVoice: ttsCurrentVoice,
                     ttsSpeed: ttsCurrentSpeed,
                     ttsPitch: ttsCurrentPitch
@@ -879,13 +906,37 @@
             if (dir !== 0) saveSettings(); // Only save if actually changed
         }
 
+        function applyFontToContents(font) {
+            currentFontFamily = font;
+            if (window.rendition) {
+                window.rendition.themes.override('font-family', font, true);
+                const contents = window.rendition.getContents ? window.rendition.getContents() : [];
+                contents.forEach(content => {
+                    if (!content || !content.document) return;
+                    const doc = content.document;
+                    const styleId = 'tts-font-override';
+                    let styleEl = doc.getElementById(styleId);
+                    if (!styleEl) {
+                        styleEl = doc.createElement('style');
+                        styleEl.id = styleId;
+                        doc.head.appendChild(styleEl);
+                    }
+                    styleEl.textContent = `* { font-family: ${font} !important; }`;
+                });
+            }
+            saveSettings();
+        }
+
         function setFont(font) {
-            if (window.rendition) window.rendition.themes.font(font);
+            applyFontToContents(font);
         }
 
         function applySettings() {
             setTheme(currentTheme);
             changeFontSize(0);
+            setFont(currentFontFamily);
+            const fontSelect = document.getElementById('font-family-select');
+            if (fontSelect) fontSelect.value = currentFontFamily;
 
             // Update TTS UI with saved settings
             const speedSlider = document.getElementById('tts-speed');
@@ -3355,12 +3406,12 @@
 
         // Add bookmark at current position
         async function addEpubBookmarkClick() {
-            if (!window.globalBook || !window.globalRendition) {
+            if (!window.book || !window.rendition) {
                 alert('책이 로딩되지 않았습니다');
                 return;
             }
 
-            const currentLocation = window.globalRendition.currentLocation();
+            const currentLocation = window.rendition.currentLocation();
             if (!currentLocation || !currentLocation.start) {
                 alert('현재 위치를 가져올 수 없습니다');
                 return;
@@ -3379,7 +3430,7 @@
                 percentage: percentage
             };
 
-            const bookmark = await createBookmark(fileId, 'epub', position, title, note);
+            const bookmark = await createBookmark(String(fileId), 'epub', position, title, note);
             if (bookmark) {
                 showToast('북마크가 추가되었습니다!');
                 loadEpubBookmarksPanel();
@@ -3430,8 +3481,8 @@
         // Go to bookmarked position
         function goToEpubBookmark(cfi) {
             toggleEpubBookmarksPanel();
-            if (window.globalRendition) {
-                window.globalRendition.display(cfi);
+            if (window.rendition) {
+                window.rendition.display(cfi);
                 showToast('북마크 위치로 이동했습니다');
             }
         }
