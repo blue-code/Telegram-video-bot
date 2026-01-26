@@ -106,23 +106,30 @@
         {% if series_list %}
         <div class="series-grid">
             {% for series in series_list %}
-            <div class="series-card" onclick="{% if series.count == 1 and series.first_book_id %}window.location.href='/read/{{ series.first_book_id }}?user_id={{ user_id }}'{% else %}window.location.href='/books/series/{{ user_id }}/{{ series.series|urlencode }}'{% endif %}">
+            {% set series_title = series.series_name or series.series %}
+            {% set series_count = series.count %}
+            <div class="series-card" onclick="{% if series.is_auto == False %}window.location.href='/books/user-series/{{ user_id }}/{{ series.series_id }}'{% elif series_count == 1 and series.first_book_id %}window.location.href='/read/{{ series.first_book_id }}?user_id={{ user_id }}'{% else %}window.location.href='/books/series/{{ user_id }}/{{ series.series|urlencode }}'{% endif %}">
                 <div class="series-cover">
                     {% if series.cover_url %}
-                        <img src="{{ series.cover_url }}" alt="{{ series.series }}" loading="lazy">
+                        <img src="{{ series.cover_url }}" alt="{{ series_title }}" loading="lazy">
                     {% else %}
                         <div class="series-placeholder">📖</div>
                     {% endif %}
-                    {% if series.count > 1 %}
+                    {% if series_count > 1 %}
                     <div style="position: absolute; top: 10px; right: 10px; background: rgba(102, 126, 234, 0.9); padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold;">
-                        {{ series.count }}권
+                        {{ series_count }}권
+                    </div>
+                    {% endif %}
+                    {% if series.is_auto == False %}
+                    <div style="position: absolute; top: 10px; left: 10px; background: rgba(76, 175, 80, 0.9); padding: 4px 8px; border-radius: 12px; font-size: 10px; font-weight: bold;">
+                        👤 내 시리즈
                     </div>
                     {% endif %}
                 </div>
                 <div class="series-info">
-                    <div class="series-name" title="{{ series.series }}">{{ series.series }}</div>
+                    <div class="series-name" title="{{ series_title }}">{{ series_title }}</div>
                     <div class="series-meta">
-                        <span>{{ series.count }}권</span>
+                        <span>{{ series_count }}권</span>
                     </div>
                 </div>
             </div>
