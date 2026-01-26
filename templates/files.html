@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#667eea">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="/static/nav.js"></script>
+    <script src="/static/bookmarks-series.js"></script>
     <style>
         /* Base styles from dashboard */
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -163,6 +164,32 @@
         </script>
 
         <div class="file-manager">
+            <!-- Series List Section -->
+            {% if series_list %}
+            <div style="background: rgba(0,0,0,0.3); border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+                <h3 style="margin-bottom: 15px;">📚 내 시리즈 ({{ series_list|length }}개)</h3>
+                <div style="display: flex; flex-direction: column; gap: 10px;">
+                    {% for series in series_list %}
+                    <div style="background: rgba(255,255,255,0.05); padding: 12px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 600; margin-bottom: 4px;">{{ series.title }}</div>
+                            <div style="font-size: 12px; color: #aaa;">
+                                {{ series.completed_items or 0 }}/{{ series.total_items or 0 }} 완료
+                                {% if series.content_type %}
+                                • {{ 'EPUB' if series.content_type == 'epub' else '만화책' if series.content_type == 'comic' else '혼합' }}
+                                {% endif %}
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <button class="btn btn-primary" onclick="viewSeriesItems({{ series.id }})">📋 보기</button>
+                            <button class="btn btn-danger" onclick="deleteSeries({{ series.id }}, '{{ series.title }}')">🗑️ 삭제</button>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+
             <div class="upload-area" id="drop-zone">
                 <div style="font-size: 32px; margin-bottom: 10px;">📤</div>
                 <p>파일을 여기에 드래그하거나 클릭하여 업로드하세요</p>
@@ -192,6 +219,9 @@
             <div class="toolbar">
                 <button class="btn btn-primary" onclick="requestMultiDownload()">선택 다운로드 (Zip)</button>
                 <button class="btn btn-danger" onclick="deleteSelected()">선택 삭제</button>
+                <button id="select-all-btn" class="btn" style="background: rgba(76, 175, 80, 0.8);" onclick="toggleSelectAllFiles()">✓ 전체선택</button>
+                <button id="create-series-btn" class="btn" style="background: rgba(102, 126, 234, 0.8);" onclick="createSeriesFromFiles()">📚 새 시리즈</button>
+                <button id="add-to-series-btn" class="btn" style="background: rgba(156, 39, 176, 0.8);" onclick="addToExistingSeries()">➕ 기존 시리즈에 추가</button>
                 <span style="flex:1"></span>
                 <span id="status-msg"></span>
             </div>
@@ -200,7 +230,7 @@
                 {% if files %}
                     {% for file in files %}
                     <div class="file-item">
-                        <input type="checkbox" class="file-checkbox" value="{{ file.id }}">
+                        <input type="checkbox" class="file-checkbox" value="{{ file.id }}" data-file-name="{{ file.file_name }}" data-file-id="{{ file.file_id }}">
                         <div class="file-icon">📄</div>
                         <div class="file-info">
                             <div class="file-name">{{ file.file_name }}</div>
@@ -384,6 +414,273 @@
                 alert('링크가 복사되었습니다!\n' + url);
             } catch (err) {
                 prompt('링크를 복사하세요:', url);
+            }
+        }
+
+        // ============================================================
+        // Series Creation for Files Page
+        // ============================================================
+
+        function toggleSelectAllFiles() {
+            const checkboxes = document.querySelectorAll('.file-checkbox');
+            const btn = document.getElementById('select-all-btn');
+
+            const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+
+            if (allChecked) {
+                checkboxes.forEach(cb => cb.checked = false);
+                btn.textContent = '✓ 전체선택';
+                btn.style.background = 'rgba(76, 175, 80, 0.8)';
+            } else {
+                checkboxes.forEach(cb => cb.checked = true);
+                btn.textContent = '✗ 전체해제';
+                btn.style.background = 'rgba(244, 67, 54, 0.8)';
+            }
+        }
+
+        async function createSeriesFromFiles() {
+            const selected = Array.from(document.querySelectorAll('.file-checkbox:checked'));
+
+            if (selected.length === 0) {
+                alert('선택된 파일이 없습니다.');
+                return;
+            }
+
+            // Detect content types from file names
+            const items = selected.map(cb => {
+                const fileName = cb.dataset.fileName;
+                const fileId = cb.dataset.fileId;
+                let contentType = null;
+
+                if (fileName.toLowerCase().endsWith('.epub')) {
+                    contentType = 'epub';
+                } else if (fileName.toLowerCase().endsWith('.cbz') || fileName.toLowerCase().endsWith('.zip')) {
+                    // Check if it's a comic book (need to verify with metadata)
+                    contentType = 'comic';
+                }
+
+                return { fileId, fileName, contentType };
+            });
+
+            // Validation: Check for unknown types
+            const unknownTypes = items.filter(item => !item.contentType);
+            if (unknownTypes.length > 0) {
+                alert('⚠️ EPUB 또는 만화책(CBZ/ZIP) 파일만 시리즈에 추가할 수 있습니다.\n다음 파일은 지원되지 않습니다:\n' +
+                    unknownTypes.map(item => item.fileName).join('\n'));
+                return;
+            }
+
+            // Validation: Check for mixed types
+            const contentTypes = new Set(items.map(item => item.contentType));
+            if (contentTypes.size > 1) {
+                alert('⚠️ 만화책과 EPUB를 같은 시리즈에 넣을 수 없습니다.\n같은 타입의 파일만 선택해주세요.');
+                return;
+            }
+
+            const contentType = items[0].contentType;
+
+            // Prompt for series details
+            const title = prompt('시리즈 제목을 입력하세요:');
+            if (!title || title.trim() === '') {
+                return;
+            }
+
+            const description = prompt('시리즈 설명 (선택사항):') || '';
+
+            // Create series
+            const series = await createSeries(title.trim(), description.trim() || null, contentType);
+            if (!series) {
+                return;
+            }
+
+            // Add all selected items to the series
+            let successCount = 0;
+            for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                const success = await addToSeries(series.id, item.fileId, item.contentType, i + 1);
+                if (success) {
+                    successCount++;
+                }
+            }
+
+            if (successCount === items.length) {
+                alert(`✅ 시리즈 "${title}"가 생성되었습니다!\n${successCount}개 파일이 추가되었습니다.`);
+
+                // Uncheck all
+                document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+                document.getElementById('select-all-btn').textContent = '✓ 전체선택';
+                document.getElementById('select-all-btn').style.background = 'rgba(76, 175, 80, 0.8)';
+            } else {
+                alert(`⚠️ 일부 파일 추가에 실패했습니다.\n성공: ${successCount}/${items.length}`);
+            }
+        }
+
+        async function addToExistingSeries() {
+            const selected = Array.from(document.querySelectorAll('.file-checkbox:checked'));
+
+            if (selected.length === 0) {
+                alert('선택된 파일이 없습니다.');
+                return;
+            }
+
+            // Detect content types from file names
+            const items = selected.map(cb => {
+                const fileName = cb.dataset.fileName;
+                const fileId = cb.dataset.fileId;
+                let contentType = null;
+
+                if (fileName.toLowerCase().endsWith('.epub')) {
+                    contentType = 'epub';
+                } else if (fileName.toLowerCase().endsWith('.cbz') || fileName.toLowerCase().endsWith('.zip')) {
+                    contentType = 'comic';
+                }
+
+                return { fileId, fileName, contentType };
+            });
+
+            // Validation: Check for unknown types
+            const unknownTypes = items.filter(item => !item.contentType);
+            if (unknownTypes.length > 0) {
+                alert('⚠️ EPUB 또는 만화책(CBZ/ZIP) 파일만 시리즈에 추가할 수 있습니다.\n다음 파일은 지원되지 않습니다:\n' +
+                    unknownTypes.map(item => item.fileName).join('\n'));
+                return;
+            }
+
+            // Validation: Check for mixed types
+            const contentTypes = new Set(items.map(item => item.contentType));
+            if (contentTypes.size > 1) {
+                alert('⚠️ 만화책과 EPUB를 같은 시리즈에 넣을 수 없습니다.\n같은 타입의 파일만 선택해주세요.');
+                return;
+            }
+
+            const contentType = items[0].contentType;
+
+            // Get user series
+            try {
+                const response = await fetch(`/api/series?user_id=${userId}&content_type=${contentType}`);
+                const data = await response.json();
+
+                if (!data.success || !data.data || data.data.length === 0) {
+                    alert('아직 시리즈가 없습니다. 먼저 "새 시리즈" 버튼으로 시리즈를 생성해주세요.');
+                    return;
+                }
+
+                const seriesList = data.data;
+
+                // Build series selection list
+                let message = '추가할 시리즈를 선택하세요:\n\n';
+                seriesList.forEach((series, index) => {
+                    message += `${index + 1}. ${series.title}`;
+                    if (series.description) {
+                        message += ` - ${series.description}`;
+                    }
+                    message += ` (${series.total_items || 0}권)\n`;
+                });
+
+                const selection = prompt(message + '\n번호를 입력하세요:');
+                if (!selection) {
+                    return;
+                }
+
+                const selectedIndex = parseInt(selection) - 1;
+                if (selectedIndex < 0 || selectedIndex >= seriesList.length) {
+                    alert('잘못된 번호입니다.');
+                    return;
+                }
+
+                const selectedSeries = seriesList[selectedIndex];
+
+                // Validate content type match
+                if (selectedSeries.content_type !== contentType) {
+                    alert(`⚠️ 선택한 시리즈는 ${selectedSeries.content_type === 'epub' ? 'EPUB' : '만화책'} 시리즈입니다.\n${contentType === 'epub' ? 'EPUB' : '만화책'} 파일만 추가할 수 있습니다.`);
+                    return;
+                }
+
+                // Add all selected items to the series
+                let successCount = 0;
+                const currentItemCount = selectedSeries.total_items || 0;
+
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    const itemOrder = currentItemCount + i + 1;
+                    const success = await addToSeries(selectedSeries.id, item.fileId, item.contentType, itemOrder);
+                    if (success) {
+                        successCount++;
+                    }
+                }
+
+                if (successCount === items.length) {
+                    alert(`✅ "${selectedSeries.title}" 시리즈에 ${successCount}개 파일이 추가되었습니다.`);
+
+                    // Uncheck all
+                    document.querySelectorAll('.file-checkbox').forEach(cb => cb.checked = false);
+                    document.getElementById('select-all-btn').textContent = '✓ 전체선택';
+                    document.getElementById('select-all-btn').style.background = 'rgba(76, 175, 80, 0.8)';
+
+                    // Reload page
+                    location.reload();
+                } else {
+                    alert(`⚠️ 일부 파일 추가에 실패했습니다.\n성공: ${successCount}/${items.length}`);
+                }
+
+            } catch (error) {
+                console.error('Error fetching series:', error);
+                alert('시리즈 목록을 불러오는데 실패했습니다.');
+            }
+        }
+
+        // ============================================================
+        // Series Management Functions
+        // ============================================================
+
+        async function viewSeriesItems(seriesId) {
+            try {
+                const response = await fetch(`/api/series/${seriesId}/items?user_id=${userId}`);
+                const data = await response.json();
+
+                if (data.success) {
+                    const items = data.data;
+                    if (items.length === 0) {
+                        alert('시리즈에 파일이 없습니다.');
+                        return;
+                    }
+
+                    let message = `시리즈 파일 목록:\n\n`;
+                    items.forEach((item, index) => {
+                        message += `${index + 1}. ${item.file_id}\n`;
+                    });
+
+                    alert(message);
+                } else {
+                    alert('시리즈 정보를 불러오는데 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('Error fetching series items:', error);
+                alert('오류가 발생했습니다.');
+            }
+        }
+
+        async function deleteSeries(seriesId, seriesTitle) {
+            if (!confirm(`"${seriesTitle}" 시리즈를 삭제하시겠습니까?\n\n⚠️ 주의: 시리즈만 삭제되며, 파일은 삭제되지 않습니다.`)) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/series/${seriesId}?user_id=${userId}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert(`✅ "${seriesTitle}" 시리즈가 삭제되었습니다.`);
+                    location.reload();
+                } else {
+                    alert('❌ 시리즈 삭제에 실패했습니다.');
+                }
+            } catch (error) {
+                console.error('Error deleting series:', error);
+                alert('오류가 발생했습니다.');
             }
         }
     </script>

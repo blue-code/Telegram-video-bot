@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#667eea">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="/static/nav.js"></script>
+    <script src="/static/bookmarks-series.js"></script>
     <style>
         /* Reuse styles from books.html */
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -93,6 +94,14 @@
             font-size: 12px; font-weight: 600;
         }
 
+        /* Completion badge */
+        .completion-badge {
+            position: absolute; top: 10px; left: 10px;
+            background: #4CAF50; color: #fff;
+            padding: 4px 10px; border-radius: 12px;
+            font-size: 12px; font-weight: 600;
+        }
+
         .comic-info { padding: 15px; flex: 1; display: flex; flex-direction: column; }
         .comic-title {
             font-weight: 600; font-size: 16px; margin-bottom: 5px;
@@ -163,6 +172,9 @@
             <a href="/comics/files/{{ user_id }}?sort_by=title" class="filter-btn {% if sort_by == 'title' %}active{% endif %}">
                 제목순
             </a>
+            <button id="select-all-btn" onclick="toggleSelectAll()" class="filter-btn" style="background: rgba(76, 175, 80, 0.8); font-weight: bold;">
+                ✓ 전체선택
+            </button>
             <a href="/comics/{{ user_id }}" class="filter-btn" style="background: rgba(102, 126, 234, 0.5); font-weight: bold;">
                 🔙 시리즈 뷰로 이동
             </a>
@@ -224,6 +236,39 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');
         }
+
+        // Load completion status for all comics
+        async function loadComicsCompletion() {
+            const userId = {{ user_id }};
+            const cards = document.querySelectorAll('.comic-card');
+
+            for (const card of cards) {
+                const fileId = card.getAttribute('onclick').match(/\/comic_reader\/(.+?)\?/)[1];
+
+                try {
+                    const isCompleted = await getCompletionStatus(userId, fileId, 'comic');
+                    if (isCompleted) {
+                        const cover = card.querySelector('.comic-cover');
+                        const badge = document.createElement('div');
+                        badge.className = 'completion-badge';
+                        badge.textContent = '✓ 완료';
+                        cover.appendChild(badge);
+                    }
+                } catch (error) {
+                    console.error('Error loading completion for', fileId, error);
+                }
+            }
+        }
+
+        // Load completion badges on page load
+        if (document.querySelector('.comic-card')) {
+            loadComicsCompletion();
+        }
+
+        // Initialize checkboxes on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            initializeCheckboxes('comic');
+        });
     </script>
 </body>
 </html>

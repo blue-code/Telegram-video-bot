@@ -11,6 +11,7 @@
     <meta name="theme-color" content="#1a1a1a">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.1.5/jszip.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/epubjs/dist/epub.min.js"></script>
+    <script src="/static/bookmarks-series.js"></script>
     <!-- Edge TTS Backend Client -->
     <script>
         // EdgeTTS Backend Client (calls FastAPI endpoint)
@@ -70,6 +71,9 @@
         // Expose globally
         window.EdgeTTS = EdgeTTS;
         console.log('✅ EdgeTTS backend client loaded');
+        console.log('🆕🆕🆕 READER.HTML VERSION 4.1 - 2025-01-24 00:05 🆕🆕🆕');
+        console.log('📌 Features: Enhanced percentage fallback with debug logs');
+        console.log('🔥 FIXED: Percentage restoration now uses correct EPUB.js API! 🔥');
 
         // Singleton Audio Controller
         // Manages audio playback state to prevent multiple audio streams from playing simultaneously.
@@ -471,7 +475,16 @@
     <div id="controls">
         <div class="control-row">
             <a href="/files/{{ user_id }}" class="back-btn">← Back</a>
-            <span style="font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ title }}</span>
+            <span style="font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;">{{ title }}</span>
+            <button onclick="toggleEpubCompletion()" id="completion-btn-epub" title="완료 표시" style="background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; margin-left: 10px;">
+                ✓
+            </button>
+            <button onclick="addEpubBookmarkClick()" id="bookmark-btn-epub" title="북마크" style="background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; margin-left: 10px;">
+                📑
+            </button>
+            <button onclick="showEpubSeriesModal()" id="series-btn-epub" title="시리즈 추가" style="background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; margin-left: 10px;">
+                📚
+            </button>
         </div>
     </div>
 
@@ -578,6 +591,17 @@
                 <button class="theme-btn" onclick="stopTimer()" style="background: #dc2626; border-color: #dc2626;">끄기</button>
             </div>
             <button class="theme-btn" onclick="closeTimerModal()" style="width: 100%; background: #444; border-color: #444;">취소</button>
+        </div>
+    </div>
+
+    <!-- Bookmarks Panel -->
+    <div class="settings-panel" id="bookmarks-panel-epub">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3 style="margin: 0;">📑 북마크</h3>
+            <button onclick="toggleEpubBookmarksPanel()" style="background: none; border: none; color: #fff; font-size: 24px; cursor: pointer;">✕</button>
+        </div>
+        <div id="bookmarks-list-epub" style="max-height: 50vh; overflow-y: auto;">
+            <p style="color: #888; text-align: center;">북마크를 로딩 중...</p>
         </div>
     </div>
 
@@ -1467,7 +1491,8 @@
                     throw new Error('Cannot get current location - invalid state');
                 }
                 const savedCFI = currentLocation.start.cfi;
-                console.log(`🔮 [PREFETCH] Saved current CFI: ${savedCFI.substring(0, 50)}...`);
+                const savedPercentage = currentLocation.start.percentage; // ALSO save percentage for backup restoration
+                console.log(`🔮 [PREFETCH] Saved current position: ${(savedPercentage * 100).toFixed(1)}%, CFI: ${savedCFI.substring(0, 50)}...`);
 
                 // CRITICAL: Set prefetch mode to prevent overlap detection in extractPageText()
                 isPrefetchMode = true;
@@ -1508,13 +1533,12 @@
                 console.log(`   FULL: ${nextPageFullText.length} chars`);
                 console.log(`   CLEAN preview: "${nextPageCleanText.substring(0, 100)}..."`);
 
-                // CRITICAL: Return to current page with validation
-                console.log(`🔮 [PREFETCH] Returning to saved CFI: ${savedCFI.substring(0, 50)}...`);
+                // CRITICAL: Return to current page with SMART RESTORATION (CFI first, then percentage fallback)
+                console.log(`🔮 [PREFETCH] Returning to saved position: ${(savedPercentage * 100).toFixed(1)}%, CFI: ${savedCFI.substring(0, 50)}...`);
                 restorationAttempted = true;
 
+                // Try 1: Restore by CFI (most accurate)
                 await window.rendition.display(savedCFI);
-
-                // Wait for page to settle
                 await new Promise(resolve => setTimeout(resolve, 150));
 
                 // VISUAL FIX: Restore iframe visibility
@@ -1524,14 +1548,59 @@
                 }
 
                 // VALIDATE restoration
-                const restoredLocation = window.rendition.currentLocation();
-                if (restoredLocation && restoredLocation.start && restoredLocation.start.cfi === savedCFI) {
-                    console.log('✅ [PREFETCH] Page restoration validated');
+                let restoredLocation = window.rendition.currentLocation();
+                const restoredCFI = restoredLocation?.start?.cfi || '';
+                const restoredPercentage = restoredLocation?.start?.percentage || 0;
+
+                if (restoredCFI === savedCFI) {
+                    console.log('✅ [PREFETCH] Page restored by CFI - exact match!');
                 } else {
-                    console.warn('⚠️ [PREFETCH] Page restoration validation failed - CFI mismatch');
-                    console.warn(`   Expected: ${savedCFI.substring(0, 50)}...`);
-                    console.warn(`   Got: ${restoredLocation?.start?.cfi?.substring(0, 50) || 'null'}...`);
-                    // Continue anyway - we tried our best
+                    console.warn('⚠️ [PREFETCH] CFI restoration failed - trying percentage fallback...');
+                    console.warn(`   Expected CFI: ${savedCFI.substring(0, 50)}...`);
+                    console.warn(`   Got CFI: ${restoredCFI.substring(0, 50) || 'null'}...`);
+                    console.warn(`   Expected %: ${(savedPercentage * 100).toFixed(1)}%`);
+                    console.warn(`   Got %: ${(restoredPercentage * 100).toFixed(1)}%`);
+
+                    // Try 2: Restore by percentage (fallback)
+                    const book = window.rendition.book;
+                    console.log(`🔍 [PREFETCH DEBUG] book=${!!book}, locations=${!!book?.locations}, length=${book?.locations?.length || 0}`);
+
+                    if (book && book.locations && book.locations.total > 0) {
+                        console.log('🔄 [PREFETCH] Attempting restoration by percentage...');
+
+                        // Try method 1: cfiFromPercentage (most direct)
+                        let percentageCFI = null;
+                        if (typeof book.locations.cfiFromPercentage === 'function') {
+                            percentageCFI = book.locations.cfiFromPercentage(savedPercentage);
+                            console.log(`   Method 1 (cfiFromPercentage): ${percentageCFI ? 'success' : 'failed'}`);
+                        }
+
+                        // Try method 2: cfiFromLocation (fallback)
+                        if (!percentageCFI && typeof book.locations.cfiFromLocation === 'function') {
+                            const targetLocation = Math.floor(savedPercentage * book.locations.total);
+                            percentageCFI = book.locations.cfiFromLocation(targetLocation);
+                            console.log(`   Method 2 (cfiFromLocation): ${percentageCFI ? 'success' : 'failed'}`);
+                        }
+
+                        if (percentageCFI) {
+                            await window.rendition.display(percentageCFI);
+                            await new Promise(resolve => setTimeout(resolve, 150));
+
+                            restoredLocation = window.rendition.currentLocation();
+                            const finalPercentage = restoredLocation?.start?.percentage || 0;
+                            const percentageDiff = Math.abs(finalPercentage - savedPercentage) * 100;
+
+                            if (percentageDiff < 1.0) { // Within 1% is acceptable
+                                console.log(`✅ [PREFETCH] Page restored by percentage - ${percentageDiff.toFixed(1)}% diff`);
+                            } else {
+                                console.warn(`⚠️ [PREFETCH] Percentage restoration imperfect - ${percentageDiff.toFixed(1)}% diff`);
+                            }
+                        } else {
+                            console.error('❌ [PREFETCH] Percentage restoration failed - no valid CFI from percentage');
+                        }
+                    } else {
+                        console.error(`❌ [PREFETCH] Percentage restoration skipped - locations not available (total=${book?.locations?.total || 0})`);
+                    }
                 }
 
                 if (!nextPageCleanText || nextPageCleanText.length < 10) {
@@ -2314,6 +2383,145 @@
             toast.style.opacity = '1';
             setTimeout(() => { toast.style.opacity = '0'; }, 3000);
         }
+
+        // ========== BOOKMARKS & SERIES FUNCTIONS (EPUB) ==========
+
+        let isEpubCompleted = false;
+
+        // Load completion status on page load
+        async function loadEpubCompletion() {
+            try {
+                isEpubCompleted = await getCompletionStatus(fileId, 'epub');
+                const btn = document.getElementById('completion-btn-epub');
+                if (btn) {
+                    if (isEpubCompleted) {
+                        btn.style.color = '#4CAF50';
+                    } else {
+                        btn.style.color = '#fff';
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading EPUB completion status:', error);
+            }
+        }
+
+        // Toggle completion status
+        async function toggleEpubCompletion() {
+            const newStatus = await toggleCompletion(fileId, 'epub', isEpubCompleted);
+            if (newStatus !== null) {
+                isEpubCompleted = newStatus;
+                const btn = document.getElementById('completion-btn-epub');
+                if (btn) {
+                    if (isEpubCompleted) {
+                        btn.style.color = '#4CAF50';
+                        showToast('완료로 표시되었습니다!');
+                    } else {
+                        btn.style.color = '#fff';
+                        showToast('완료 표시가 해제되었습니다');
+                    }
+                }
+            }
+        }
+
+        // Add bookmark at current position
+        async function addEpubBookmarkClick() {
+            if (!window.globalBook || !window.globalRendition) {
+                alert('책이 로딩되지 않았습니다');
+                return;
+            }
+
+            const currentLocation = window.globalRendition.currentLocation();
+            if (!currentLocation || !currentLocation.start) {
+                alert('현재 위치를 가져올 수 없습니다');
+                return;
+            }
+
+            const cfi = currentLocation.start.cfi;
+            const percentage = currentLocation.start.percentage || 0;
+
+            const title = prompt('북마크 제목을 입력하세요:', `${Math.round(percentage * 100)}% 위치`);
+            if (!title) return;
+
+            const note = prompt('메모 (선택):', '');
+
+            const position = {
+                cfi: cfi,
+                percentage: percentage
+            };
+
+            const bookmark = await createBookmark(fileId, 'epub', position, title, note);
+            if (bookmark) {
+                showToast('북마크가 추가되었습니다!');
+                loadEpubBookmarksPanel();
+            }
+        }
+
+        // Toggle bookmarks panel
+        function toggleEpubBookmarksPanel() {
+            const panel = document.getElementById('bookmarks-panel-epub');
+            if (panel.classList.contains('active')) {
+                panel.classList.remove('active');
+            } else {
+                panel.classList.add('active');
+                loadEpubBookmarksPanel();
+            }
+        }
+
+        // Load bookmarks list
+        async function loadEpubBookmarksPanel() {
+            const listDiv = document.getElementById('bookmarks-list-epub');
+            listDiv.innerHTML = '<p style="color: #888; text-align: center;">로딩 중...</p>';
+
+            const bookmarks = await getBookmarks(fileId, 'epub');
+
+            if (bookmarks.length === 0) {
+                listDiv.innerHTML = '<p style="color: #888; text-align: center;">북마크가 없습니다</p>';
+                return;
+            }
+
+            listDiv.innerHTML = bookmarks.map(b => `
+                <div style="padding: 15px; margin-bottom: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;"
+                     onclick="goToEpubBookmark('${b.bookmark_position.cfi}')">
+                    <div style="font-weight: bold; margin-bottom: 5px;">${b.title}</div>
+                    ${b.note ? `<div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">${b.note}</div>` : ''}
+                    <div style="font-size: 12px; color: #667eea;">${Math.round((b.bookmark_position.percentage || 0) * 100)}% 위치</div>
+                    <button onclick="event.stopPropagation(); deleteEpubBookmarkClick(${b.id})"
+                            style="margin-top: 8px; padding: 4px 12px; background: #e74c3c; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
+                        삭제
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        // Go to bookmarked position
+        function goToEpubBookmark(cfi) {
+            toggleEpubBookmarksPanel();
+            if (window.globalRendition) {
+                window.globalRendition.display(cfi);
+                showToast('북마크 위치로 이동했습니다');
+            }
+        }
+
+        // Delete bookmark
+        async function deleteEpubBookmarkClick(bookmarkId) {
+            if (!confirm('이 북마크를 삭제하시겠습니까?')) return;
+
+            const success = await deleteBookmark(bookmarkId);
+            if (success) {
+                showToast('북마크가 삭제되었습니다');
+                loadEpubBookmarksPanel();
+            }
+        }
+
+        // Show series selection modal
+        function showEpubSeriesModal() {
+            showSeriesSelectionModal(fileId, 'epub');
+        }
+
+        // Load completion status on page load
+        setTimeout(() => {
+            loadEpubCompletion();
+        }, 1000);
     </script>
 </body>
 </html>

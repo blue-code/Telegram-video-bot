@@ -31,6 +31,7 @@ SUBTITLE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 from src.epub_parser import get_epub_metadata
 import uuid
 import aiofiles
+from src.api_bookmarks_series import router as bookmarks_series_router
 
 # Initialize
 load_dotenv()
@@ -38,6 +39,132 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TVB API", version="1.0.0")
+
+# Include routers
+# Note: user_id dependency will be handled by each route accepting user_id parameter
+app.include_router(bookmarks_series_router, tags=["Bookmarks & Series"])
+
+
+# ============================================================
+# Cache Management API
+# ============================================================
+
+@app.post("/api/cache/clear")
+async def clear_cache(user_id: int):
+    """
+    Clear server cache for EPUB and comics.
+
+    Args:
+        user_id: User ID for user-specific cache deletion
+
+    Returns:
+        Success status and stats about deleted files
+    """
+    import shutil
+    from pathlib import Path
+
+    try:
+        deleted_files = 0
+        deleted_size = 0
+
+        # 1. Clear download_cache (임시 다운로드 파일들)
+        download_cache = Path("download_cache")
+        if download_cache.exists():
+            for item in download_cache.iterdir():
+                # Skip comics folder (permanent storage)
+                if item.name == "comics":
+                    continue
+
+                try:
+                    if item.is_file():
+                        file_size = item.stat().st_size
+                        item.unlink()
+                        deleted_files += 1
+                        deleted_size += file_size
+                    elif item.is_dir():
+                        # Delete directory and contents
+                        folder_size = sum(f.stat().st_size for f in item.rglob('*') if f.is_file())
+                        folder_file_count = sum(1 for f in item.rglob('*') if f.is_file())
+                        shutil.rmtree(item)
+                        deleted_files += folder_file_count
+                        deleted_size += folder_size
+                except Exception as e:
+                    logger.error(f"Error deleting {item}: {e}")
+
+        # 2. Clear encoded_cache (인코딩된 비디오들)
+        encoded_cache = Path("encoded_cache")
+        if encoded_cache.exists():
+            for item in encoded_cache.iterdir():
+                try:
+                    if item.is_file():
+                        file_size = item.stat().st_size
+                        item.unlink()
+                        deleted_files += 1
+                        deleted_size += file_size
+                except Exception as e:
+                    logger.error(f"Error deleting {item}: {e}")
+
+        # 3. Clear user-specific comic cache (optional - only temp files)
+        # We'll skip this to preserve permanent comic storage
+
+        deleted_size_mb = deleted_size / (1024 * 1024)
+
+        logger.info(f"Cache cleared for user {user_id}: {deleted_files} files, {deleted_size_mb:.2f} MB")
+
+        return {
+            "success": True,
+            "deleted_files": deleted_files,
+            "deleted_size_mb": round(deleted_size_mb, 2),
+            "message": f"삭제됨: {deleted_files}개 파일, {deleted_size_mb:.2f} MB"
+        }
+
+    except Exception as e:
+        logger.error(f"Error clearing cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cache/stats")
+async def get_cache_stats():
+    """
+    Get cache statistics (size, file count).
+
+    Returns:
+        Cache statistics
+    """
+    from pathlib import Path
+
+    try:
+        stats = {
+            "download_cache": {"files": 0, "size_mb": 0},
+            "encoded_cache": {"files": 0, "size_mb": 0},
+            "total": {"files": 0, "size_mb": 0}
+        }
+
+        # Download cache stats
+        download_cache = Path("download_cache")
+        if download_cache.exists():
+            files = [f for f in download_cache.rglob('*') if f.is_file() and 'comics' not in str(f)]
+            stats["download_cache"]["files"] = len(files)
+            stats["download_cache"]["size_mb"] = round(sum(f.stat().st_size for f in files) / (1024 * 1024), 2)
+
+        # Encoded cache stats
+        encoded_cache = Path("encoded_cache")
+        if encoded_cache.exists():
+            files = [f for f in encoded_cache.rglob('*') if f.is_file()]
+            stats["encoded_cache"]["files"] = len(files)
+            stats["encoded_cache"]["size_mb"] = round(sum(f.stat().st_size for f in files) / (1024 * 1024), 2)
+
+        # Total
+        stats["total"]["files"] = stats["download_cache"]["files"] + stats["encoded_cache"]["files"]
+        stats["total"]["size_mb"] = stats["download_cache"]["size_mb"] + stats["encoded_cache"]["size_mb"]
+
+        return {"success": True, "stats": stats}
+
+    except Exception as e:
+        logger.error(f"Error getting cache stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 DEFAULT_USER_ID = int(os.getenv("ADMIN_USER_ID", "41509535"))
 SUPER_ADMIN_ID = int(os.getenv("SUPER_ADMIN_ID", "41509535"))
@@ -2229,14 +2356,18 @@ async def books_page(
     q: str = ""
 ):
     from src.db import get_files, count_files
-    
+    from src.db_bookmarks_series import get_all_series_file_ids
+
     try:
         if page < 1: page = 1
-        
+
+        # Get all file_ids in series (to exclude them)
+        series_file_ids = await get_all_series_file_ids(user_id, "epub")
+
         # Workaround for Cloudflare 500 error on %.epub queries
         # Fetch larger dataset and filter in Python
         fetch_limit = 1000
-        
+
         all_files = await get_files(
             user_id=user_id,
             limit=fetch_limit,
@@ -2244,28 +2375,32 @@ async def books_page(
             query=q,
             ext="epub" # Ignored by DB, used as intent marker
         )
-        
-        # Python Filtering
-        books = [f for f in all_files if f.get('file_name', '').lower().endswith('.epub')]
-        
+
+        # Python Filtering: exclude EPUB files that are in series
+        books = [
+            f for f in all_files
+            if f.get('file_name', '').lower().endswith('.epub')
+            and f.get('file_id') not in series_file_ids
+        ]
+
         # Manual Pagination
         total_count = len(books)
         start = (page - 1) * per_page
         end = start + per_page
         paginated_books = books[start:end]
-        
+
         total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
-        
+
         formatted_books = []
         for b in paginated_books:
             metadata = b.get("metadata") or {}
-            
+
             # Format cover URL
             cover_url = ""
             cover_file_id = metadata.get("cover_file_id")
             if cover_file_id:
                 cover_url = f"/thumb/{cover_file_id}"
-            
+
             formatted_books.append({
                 "id": b["id"],
                 "title": metadata.get("book_title") or b["file_name"],
@@ -2273,7 +2408,7 @@ async def books_page(
                 "cover_url": cover_url,
                 "size_mb": f"{b['file_size'] / (1024*1024):.1f}" if b.get('file_size') else ""
             })
-            
+
         return templates.TemplateResponse("books.html", {
             "request": request,
             "user_id": user_id,
@@ -2300,21 +2435,63 @@ async def book_series_list_page(
     request: Request,
     user_id: int
 ):
-    """List all book series"""
+    """List all book series (both user-created and auto-grouped)"""
     from src.db import get_book_series
-    
+    from src.db_bookmarks_series import get_user_series, get_series_items, get_all_series_file_ids
+
     try:
-        series_list = await get_book_series(user_id)
-        
-        # Add cover URL
-        for series in series_list:
+        # Get all file_ids in user-created series (to exclude them from auto-grouping)
+        series_file_ids = await get_all_series_file_ids(user_id, "epub")
+
+        # Get auto-grouped series (old system), excluding files in user-created series
+        auto_series = await get_book_series(user_id, exclude_file_ids=series_file_ids)
+
+        # Add cover URL for auto series
+        for series in auto_series:
             if series.get("cover_file_id"):
                 series["cover_url"] = f"/thumb/{series['cover_file_id']}"
-                
+            series["is_auto"] = True  # Mark as auto-grouped
+            series["series_id"] = None  # No database series_id
+
+        # Get user-created series (new system)
+        user_series = await get_user_series(user_id, "epub")
+
+        # Format user series to match template format
+        formatted_user_series = []
+        for series in user_series:
+            # Get items to find cover
+            items = await get_series_items(series["id"], user_id)
+
+            cover_url = ""
+            if items and len(items) > 0:
+                # Try to get cover from first item
+                first_item = items[0]
+                # We need to fetch the file metadata to get cover
+                from src.db import get_file_by_file_id
+                file_data = await get_file_by_file_id(first_item["file_id"], user_id)
+                if file_data:
+                    metadata = file_data.get("metadata") or {}
+                    cover_file_id = metadata.get("cover_file_id")
+                    if cover_file_id:
+                        cover_url = f"/thumb/{cover_file_id}"
+
+            formatted_user_series.append({
+                "series_name": series["title"],
+                "count": series.get("total_items", 0),
+                "cover_url": cover_url,
+                "cover_file_id": None,
+                "is_auto": False,
+                "series_id": series["id"],  # Include series_id for editing/deleting
+                "description": series.get("description", "")
+            })
+
+        # Combine both lists (user-created series first)
+        all_series = formatted_user_series + auto_series
+
         return templates.TemplateResponse("books_series.html", {
             "request": request,
             "user_id": user_id,
-            "series_list": series_list
+            "series_list": all_series
         })
     except Exception as e:
         logger.error(f"Error loading book series: {e}")
@@ -2324,13 +2501,69 @@ async def book_series_list_page(
             "error_message": "Could not load book series"
         })
 
+@app.get("/books/user-series/{user_id}/{series_id}", response_class=HTMLResponse)
+async def user_series_detail_page(
+    request: Request,
+    user_id: int,
+    series_id: int
+):
+    """User-created series detail page"""
+    from src.db_bookmarks_series import get_series_details, get_series_items
+    from src.db import get_file_by_file_id
+
+    try:
+        # Get series details
+        series = await get_series_details(series_id, user_id)
+        if not series:
+            raise HTTPException(status_code=404, detail="Series not found")
+
+        # Get items in series
+        items = await get_series_items(series_id, user_id)
+
+        # Format books
+        formatted_books = []
+        for item in items:
+            # Fetch file data
+            file_data = await get_file_by_file_id(item["file_id"], user_id)
+            if not file_data:
+                continue
+
+            metadata = file_data.get("metadata") or {}
+            cover_file_id = metadata.get("cover_file_id")
+            cover_url = f"/thumb/{cover_file_id}" if cover_file_id else ""
+
+            formatted_books.append({
+                "id": file_data["id"],
+                "title": metadata.get("book_title") or file_data["file_name"],
+                "cover_url": cover_url,
+                "volume": item.get("item_order"),
+                "size_mb": f"{file_data['file_size'] / (1024*1024):.1f}" if file_data.get('file_size') else ""
+            })
+
+        return templates.TemplateResponse("book_series_detail.html", {
+            "request": request,
+            "user_id": user_id,
+            "series_name": series["title"],
+            "books": formatted_books,
+            "total_count": len(formatted_books),
+            "series_id": series_id,
+            "is_user_series": True
+        })
+    except Exception as e:
+        logger.error(f"Error loading user series detail: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load series detail"
+        })
+
 @app.get("/books/series/{user_id}/{series_name}", response_class=HTMLResponse)
 async def book_series_detail_page(
     request: Request,
     user_id: int,
     series_name: str
 ):
-    """Book series detail page"""
+    """Book series detail page (auto-grouped)"""
     from src.db import get_books_by_series
     from urllib.parse import unquote
     
@@ -2370,7 +2603,7 @@ async def book_series_detail_page(
 
 @app.get("/files/{user_id}", response_class=HTMLResponse)
 async def files_page(
-    request: Request, 
+    request: Request,
     user_id: int,
     q: str = "",
     date_from: str = "",
@@ -2382,7 +2615,8 @@ async def files_page(
 ):
     """File management page with search, filters, pagination, and type filter"""
     from src.db import get_files, count_files
-    
+    from src.db_bookmarks_series import get_user_series
+
     try:
         if page < 1: page = 1
         
@@ -2430,7 +2664,10 @@ async def files_page(
             )
         
         total_pages = (total_count + per_page - 1) // per_page if total_count > 0 else 1
-        
+
+        # Get user series
+        all_series = await get_user_series(user_id, None)
+
         # Format for template
         formatted_files = []
         for f in files:
@@ -2439,10 +2676,10 @@ async def files_page(
             is_large = False
             if metadata.get("parts") and len(metadata["parts"]) > 1:
                 is_large = True
-            
+
             # Check if epub
             is_epub = f.get("file_name", "").lower().endswith(".epub")
-            
+
             formatted_files.append({
                 "id": f["id"],
                 "file_id": f["file_id"],
@@ -2465,7 +2702,8 @@ async def files_page(
             "page": page,
             "total_pages": total_pages,
             "total_count": total_count,
-            "ext": ext
+            "ext": ext,
+            "series_list": all_series
         })
     except Exception as e:
         logger.error(f"Error loading files page: {e}")
@@ -3816,8 +4054,12 @@ async def comic_files_page(
 ):
     """Comic books flat file list page"""
     from src.db import get_comics, count_comics
+    from src.db_bookmarks_series import get_all_series_file_ids
 
     try:
+        # Get all file_ids in series (to exclude them)
+        series_file_ids = await get_all_series_file_ids(user_id, "comic")
+
         offset = (page - 1) * per_page
 
         # Get comics with filters
@@ -3829,6 +4071,12 @@ async def comic_files_page(
             series=series,
             sort_by=sort_by
         )
+
+        # Filter out comics that are in user-created series
+        comics = [
+            comic for comic in comics
+            if comic.get('file_id') not in series_file_ids
+        ]
 
         # Get total count
         total_count = await count_comics(
@@ -3883,22 +4131,60 @@ async def comic_series_list_page(
     request: Request,
     user_id: int
 ):
-    """List all comic series (Main Entry Point)"""
+    """List all comic series (both user-created and auto-grouped)"""
     from src.db import get_comic_series
+    from src.db_bookmarks_series import get_user_series, get_series_items, get_all_series_file_ids
 
     try:
-        series_list = await get_comic_series(user_id)
+        # Get all file_ids in user-created series (to exclude them from auto-grouping)
+        series_file_ids = await get_all_series_file_ids(user_id, "comic")
 
-        # Add cover URL for each series (use first comic's cover)
-        for series in series_list:
+        # Get auto-grouped series (old system), excluding files in user-created series
+        auto_series = await get_comic_series(user_id, exclude_file_ids=series_file_ids)
+
+        # Add cover URL for auto series and mark as auto-grouped
+        for series in auto_series:
             first_file_id = series.get("first_file_id")
             if first_file_id:
                 series["cover_url"] = f"/api/comics/thumbnail/{first_file_id}"
+            series["is_auto"] = True  # Mark as auto-grouped
+            series["series_id"] = None  # No database series_id
+
+        # Get user-created series (new system)
+        user_series = await get_user_series(user_id, "comic")
+
+        # Format user series to match template format
+        formatted_user_series = []
+        for series in user_series:
+            # Get items to find cover
+            items = await get_series_items(series["id"], user_id)
+
+            cover_url = ""
+            if items and len(items) > 0:
+                # Try to get cover from first item
+                first_item = items[0]
+                # Comics use file_id (integer) in comics table
+                from src.db import get_comic_by_file_id
+                comic_data = await get_comic_by_file_id(first_item["file_id"])
+                if comic_data:
+                    cover_url = f"/api/comics/thumbnail/{comic_data['file_id']}"
+
+            formatted_user_series.append({
+                "series_name": series["title"],
+                "count": series.get("total_items", 0),
+                "cover_url": cover_url,
+                "is_auto": False,
+                "series_id": series["id"],
+                "description": series.get("description", "")
+            })
+
+        # Combine both lists (user-created series first)
+        all_series = formatted_user_series + auto_series
 
         return templates.TemplateResponse("comic_series_list.html", {
             "request": request,
             "user_id": user_id,
-            "series_list": series_list
+            "series_list": all_series
         })
 
     except Exception as e:
@@ -3910,13 +4196,75 @@ async def comic_series_list_page(
         })
 
 
+@app.get("/comics/user-series/{user_id}/{series_id}", response_class=HTMLResponse)
+async def user_comic_series_detail_page(
+    request: Request,
+    user_id: int,
+    series_id: int
+):
+    """User-created comic series detail page"""
+    from src.db_bookmarks_series import get_series_details, get_series_items
+    from src.db import get_comic_by_file_id
+
+    try:
+        # Get series details
+        series = await get_series_details(series_id, user_id)
+        if not series:
+            raise HTTPException(status_code=404, detail="Series not found")
+
+        # Get items in series
+        items = await get_series_items(series_id, user_id)
+
+        # Format comics
+        formatted_comics = []
+        for item in items:
+            # Fetch comic data
+            comic_data = await get_comic_by_file_id(item["file_id"])
+            if not comic_data:
+                continue
+
+            cover_url = f"/api/comics/thumbnail/{comic_data['file_id']}"
+
+            # Get file size from files table
+            files_data = comic_data.get("files")
+            size_mb = ""
+            if files_data and files_data.get("file_size"):
+                size_mb = f"{files_data['file_size'] / (1024*1024):.1f}"
+
+            formatted_comics.append({
+                "file_id": comic_data["file_id"],
+                "title": comic_data.get("title") or comic_data.get("files", {}).get("file_name", "Unknown"),
+                "cover_url": cover_url,
+                "volume": item.get("item_order"),
+                "size_mb": size_mb,
+                "page_count": comic_data.get("page_count", 0)
+            })
+
+        return templates.TemplateResponse("comic_series.html", {
+            "request": request,
+            "user_id": user_id,
+            "series_name": series["title"],
+            "comics": formatted_comics,
+            "total_count": len(formatted_comics),
+            "series_id": series_id,
+            "is_user_series": True
+        })
+    except Exception as e:
+        logger.error(f"Error loading user comic series detail: {e}")
+        return templates.TemplateResponse("error.html", {
+            "request": request,
+            "error_code": 500,
+            "error_message": "Could not load series detail"
+        })
+
+
 @app.get("/comic_series/{user_id}/{series_name}", response_class=HTMLResponse)
 async def comic_series_detail_page(
     request: Request,
     user_id: int,
     series_name: str
 ):
-    """Comic series detail page showing all volumes"""
+    """Comic series detail page showing all volumes (auto-grouped)"""
     from src.db import get_comics_by_series
     from urllib.parse import unquote
 

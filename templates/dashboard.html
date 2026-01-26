@@ -377,6 +377,14 @@
                         <div class="desc">Find videos</div>
                     </div>
                 </a>
+
+                <a href="javascript:void(0)" onclick="showCacheModal()" class="action-btn">
+                    <div class="icon">🗑️</div>
+                    <div class="text">
+                        <div class="title">Clear Cache</div>
+                        <div class="desc" id="cache-desc">Loading...</div>
+                    </div>
+                </a>
             </div>
         </div>
 
@@ -422,6 +430,47 @@
         </div>
     </div>
 
+    <!-- Cache Clear Modal -->
+    <div id="cache-modal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.8); z-index: 10000; align-items: center; justify-content: center;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 16px; max-width: 500px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.5);">
+            <h2 style="margin-top: 0; margin-bottom: 20px; color: #fff;">🗑️ 캐시 삭제</h2>
+
+            <div style="background: rgba(0,0,0,0.3); padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+                <div style="margin-bottom: 15px;">
+                    <div style="font-size: 14px; color: rgba(255,255,255,0.8); margin-bottom: 5px;">다운로드 캐시</div>
+                    <div style="font-size: 18px; font-weight: bold;" id="modal-download-cache">로딩 중...</div>
+                </div>
+                <div style="margin-bottom: 15px;">
+                    <div style="font-size: 14px; color: rgba(255,255,255,0.8); margin-bottom: 5px;">인코딩 캐시</div>
+                    <div style="font-size: 18px; font-weight: bold;" id="modal-encoded-cache">로딩 중...</div>
+                </div>
+                <div style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 15px; margin-top: 15px;">
+                    <div style="font-size: 14px; color: rgba(255,255,255,0.8); margin-bottom: 5px;">전체</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #f59e0b;" id="modal-total-cache">로딩 중...</div>
+                </div>
+            </div>
+
+            <p style="font-size: 14px; color: rgba(255,255,255,0.9); margin-bottom: 20px; line-height: 1.6;">
+                ⚠️ 이 작업은 EPUB과 만화책 읽기 시 생성된 임시 파일을 삭제합니다.<br>
+                영구 저장된 만화책 파일은 삭제되지 않습니다.
+            </p>
+
+            <div style="display: flex; gap: 10px;">
+                <button onclick="clearCache()" id="clear-cache-btn" style="flex: 1; padding: 12px; background: #ef4444; color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer;">
+                    🗑️ 캐시 삭제
+                </button>
+                <button onclick="closeCacheModal()" style="flex: 1; padding: 12px; background: rgba(255,255,255,0.2); color: #fff; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer;">
+                    취소
+                </button>
+            </div>
+
+            <div id="cache-result" style="margin-top: 15px; padding: 12px; background: rgba(0,0,0,0.3); border-radius: 8px; display: none;">
+                <div style="font-size: 14px; font-weight: bold; margin-bottom: 5px;">✅ 삭제 완료</div>
+                <div id="cache-result-text" style="font-size: 13px; color: rgba(255,255,255,0.9);"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- PWA Install Prompt -->
     <script src="/static/pwa-install.js"></script>
 
@@ -429,6 +478,105 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');
         }
+
+        const userId = {{ user_id }};
+
+        // Load cache stats on page load
+        async function loadCacheStats() {
+            try {
+                const response = await fetch('/api/cache/stats');
+                const data = await response.json();
+
+                if (data.success) {
+                    const stats = data.stats;
+                    const totalSize = stats.total.size_mb;
+                    const totalFiles = stats.total.files;
+
+                    // Update button description
+                    const cacheDesc = document.getElementById('cache-desc');
+                    if (cacheDesc) {
+                        if (totalFiles > 0) {
+                            cacheDesc.textContent = `${totalFiles} files, ${totalSize} MB`;
+                        } else {
+                            cacheDesc.textContent = 'No cache';
+                        }
+                    }
+
+                    // Update modal stats
+                    document.getElementById('modal-download-cache').textContent =
+                        `${stats.download_cache.files} files, ${stats.download_cache.size_mb} MB`;
+                    document.getElementById('modal-encoded-cache').textContent =
+                        `${stats.encoded_cache.files} files, ${stats.encoded_cache.size_mb} MB`;
+                    document.getElementById('modal-total-cache').textContent =
+                        `${totalFiles} files, ${totalSize} MB`;
+                }
+            } catch (error) {
+                console.error('Error loading cache stats:', error);
+                const cacheDesc = document.getElementById('cache-desc');
+                if (cacheDesc) {
+                    cacheDesc.textContent = 'Error loading';
+                }
+            }
+        }
+
+        // Show cache modal
+        function showCacheModal() {
+            loadCacheStats();
+            document.getElementById('cache-modal').style.display = 'flex';
+        }
+
+        // Close cache modal
+        function closeCacheModal() {
+            document.getElementById('cache-modal').style.display = 'none';
+            document.getElementById('cache-result').style.display = 'none';
+        }
+
+        // Clear cache
+        async function clearCache() {
+            const btn = document.getElementById('clear-cache-btn');
+            const resultDiv = document.getElementById('cache-result');
+            const resultText = document.getElementById('cache-result-text');
+
+            btn.disabled = true;
+            btn.textContent = '삭제 중...';
+
+            try {
+                const response = await fetch(`/api/cache/clear?user_id=${userId}`, {
+                    method: 'POST'
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    resultDiv.style.display = 'block';
+                    resultText.textContent = data.message;
+
+                    // Reload stats
+                    await loadCacheStats();
+
+                    // Re-enable button
+                    btn.disabled = false;
+                    btn.textContent = '🗑️ 캐시 삭제';
+
+                    // Auto-close after 3 seconds
+                    setTimeout(() => {
+                        closeCacheModal();
+                    }, 3000);
+                } else {
+                    alert('캐시 삭제 실패: ' + (data.detail || 'Unknown error'));
+                    btn.disabled = false;
+                    btn.textContent = '🗑️ 캐시 삭제';
+                }
+            } catch (error) {
+                console.error('Error clearing cache:', error);
+                alert('캐시 삭제 중 오류가 발생했습니다');
+                btn.disabled = false;
+                btn.textContent = '🗑️ 캐시 삭제';
+            }
+        }
+
+        // Load cache stats on page load
+        loadCacheStats();
     </script>
 </body>
 </html>

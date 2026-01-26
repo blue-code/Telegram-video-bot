@@ -6,6 +6,7 @@
     <title>{{ title }} - 만화책 뷰어</title>
     <link rel="manifest" href="/static/manifest.json">
     <meta name="theme-color" content="#1a1a1a">
+    <script src="/static/bookmarks-series.js"></script>
     <style>
         body {
             margin: 0;
@@ -329,6 +330,15 @@
         <button class="favorite-btn" onclick="toggleFavorite()" id="favorite-btn" title="즐겨찾기">
             ☆
         </button>
+        <button class="favorite-btn" onclick="toggleComicCompletion()" id="completion-btn" title="완료 표시">
+            ✓
+        </button>
+        <button class="favorite-btn" onclick="addBookmarkClick()" id="bookmark-btn" title="북마크">
+            📑
+        </button>
+        <button class="favorite-btn" onclick="showSeriesModal()" id="series-btn" title="시리즈 추가">
+            📚
+        </button>
         <button class="download-btn" onclick="downloadComic()" title="다운로드">
             ⬇️
         </button>
@@ -369,6 +379,17 @@
                     끄기
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Bookmarks Panel -->
+    <div class="settings-panel" id="bookmarks-panel">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h3 style="margin: 0;">📑 북마크</h3>
+            <button onclick="toggleBookmarksPanel()" style="background: none; border: none; color: #fff; font-size: 24px; cursor: pointer;">✕</button>
+        </div>
+        <div id="bookmarks-list" style="max-height: 50vh; overflow-y: auto;">
+            <p style="color: #888; text-align: center;">북마크를 로딩 중...</p>
         </div>
     </div>
 
@@ -1119,6 +1140,130 @@
             const dy = touch1.clientY - touch2.clientY;
             return Math.sqrt(dx * dx + dy * dy);
         }
+
+        // ========== BOOKMARKS & SERIES FUNCTIONS ==========
+
+        let isCompleted = false;
+
+        // Load completion status on page load
+        async function loadCompletion() {
+            try {
+                isCompleted = await getCompletionStatus(fileId, 'comic');
+                const btn = document.getElementById('completion-btn');
+                if (isCompleted) {
+                    btn.classList.add('active');
+                    btn.style.color = '#4CAF50';
+                } else {
+                    btn.classList.remove('active');
+                    btn.style.color = '#fff';
+                }
+            } catch (error) {
+                console.error('Error loading completion status:', error);
+            }
+        }
+
+        // Toggle completion status
+        async function toggleComicCompletion() {
+            const newStatus = await toggleCompletion(fileId, 'comic', isCompleted);
+            if (newStatus !== null) {
+                isCompleted = newStatus;
+                const btn = document.getElementById('completion-btn');
+                if (isCompleted) {
+                    btn.classList.add('active');
+                    btn.style.color = '#4CAF50';
+                } else {
+                    btn.classList.remove('active');
+                    btn.style.color = '#fff';
+                }
+            }
+        }
+
+        // Add bookmark at current page
+        async function addBookmarkClick() {
+            const title = prompt('북마크 제목을 입력하세요:', `${currentPage + 1}페이지`);
+            if (!title) return;
+
+            const note = prompt('메모 (선택):', '');
+
+            const position = {
+                page: currentPage
+            };
+
+            const bookmark = await createBookmark(fileId, 'comic', position, title, note);
+            if (bookmark) {
+                alert('북마크가 추가되었습니다!');
+                loadBookmarksPanel();
+            }
+        }
+
+        // Toggle bookmarks panel
+        function toggleBookmarksPanel() {
+            const panel = document.getElementById('bookmarks-panel');
+            if (panel.classList.contains('active')) {
+                panel.classList.remove('active');
+            } else {
+                panel.classList.add('active');
+                loadBookmarksPanel();
+            }
+        }
+
+        // Load bookmarks list
+        async function loadBookmarksPanel() {
+            const listDiv = document.getElementById('bookmarks-list');
+            listDiv.innerHTML = '<p style="color: #888; text-align: center;">로딩 중...</p>';
+
+            const bookmarks = await getBookmarks(fileId, 'comic');
+
+            if (bookmarks.length === 0) {
+                listDiv.innerHTML = '<p style="color: #888; text-align: center;">북마크가 없습니다</p>';
+                return;
+            }
+
+            listDiv.innerHTML = bookmarks.map(b => `
+                <div style="padding: 15px; margin-bottom: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;"
+                     onclick="goToBookmark(${b.bookmark_position.page})">
+                    <div style="font-weight: bold; margin-bottom: 5px;">${b.title}</div>
+                    ${b.note ? `<div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">${b.note}</div>` : ''}
+                    <div style="font-size: 12px; color: #667eea;">페이지 ${b.bookmark_position.page + 1}</div>
+                    <button onclick="event.stopPropagation(); deleteBookmarkClick(${b.id})"
+                            style="margin-top: 8px; padding: 4px 12px; background: #e74c3c; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
+                        삭제
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        // Go to bookmarked page
+        function goToBookmark(page) {
+            toggleBookmarksPanel();
+            if (mode === 'comic') {
+                loadPage(page);
+            } else {
+                // Webtoon mode: scroll to page
+                const pageDiv = document.querySelector(`.webtoon-page[data-page="${page}"]`);
+                if (pageDiv) {
+                    pageDiv.scrollIntoView({ behavior: 'smooth' });
+                }
+            }
+        }
+
+        // Delete bookmark
+        async function deleteBookmarkClick(bookmarkId) {
+            if (!confirm('이 북마크를 삭제하시겠습니까?')) return;
+
+            const success = await deleteBookmark(bookmarkId);
+            if (success) {
+                loadBookmarksPanel();
+            }
+        }
+
+        // Show series selection modal
+        function showSeriesModal() {
+            showSeriesSelectionModal(fileId, 'comic');
+        }
+
+        // Load completion status on page load
+        loadCompletion();
     </script>
 </body>
 </html>

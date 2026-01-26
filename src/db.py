@@ -152,6 +152,17 @@ async def get_file_by_id(file_id: int):
     result = await sb.table(FILES_TABLE).select("*").eq("id", file_id).execute()
     return result.data[0] if result.data else None
 
+async def get_file_by_file_id(telegram_file_id: str, user_id: int):
+    """
+    Get file metadata by Telegram file_id (string).
+    """
+    sb = await get_database()
+    q = sb.table(FILES_TABLE).select("*").eq("file_id", telegram_file_id)
+    if not _is_super_admin(user_id):
+        q = q.eq("user_id", user_id)
+    result = await q.execute()
+    return result.data[0] if result.data else None
+
 async def search_files(user_id: int, query: str, limit: int = 20):
     """
     Search files by name.
@@ -964,16 +975,20 @@ async def count_comics(
     return result.count if hasattr(result, 'count') else 0
 
 
-async def get_comic_series(user_id: int):
+async def get_comic_series(user_id: int, exclude_file_ids: set = None):
     """
     Get list of all comic series for a user with volume count.
 
     Args:
         user_id: User ID
+        exclude_file_ids: Optional set of file_ids to exclude (e.g., files already in user-created series)
 
     Returns:
         List of series with metadata
     """
+    if exclude_file_ids is None:
+        exclude_file_ids = set()
+
     sb = await get_database()
 
     # Get all comics for user
@@ -990,6 +1005,10 @@ async def get_comic_series(user_id: int):
     # Group by series
     series_map = {}
     for comic in result.data:
+        # Skip files that are in user-created series
+        if comic.get("file_id") in exclude_file_ids:
+            continue
+
         series_name = comic.get("series") or comic.get("title") or "Unknown"
 
         if series_name not in series_map:
@@ -1256,32 +1275,43 @@ async def get_favorite_comics(user_id: int, limit: int = 50, offset: int = 0):
     return []
 
 
-async def get_book_series(user_id: int):
+async def get_book_series(user_id: int, exclude_file_ids: set = None):
     """
     Get list of all book series for a user.
+
+    Args:
+        user_id: User ID
+        exclude_file_ids: Optional set of file_ids to exclude (e.g., files already in user-created series)
     """
+    if exclude_file_ids is None:
+        exclude_file_ids = set()
+
     sb = await get_database()
     q = sb.table(FILES_TABLE).select("*")
     if not _is_super_admin(user_id):
         q = q.eq("user_id", user_id)
-    
+
     # Fetch reasonably large number of files to group
     # Note: Filtering by extension in DB is preferable if possible to reduce data
     # but ILIKE %.epub might fail on some WAFs.
     # We'll fetch and filter.
     result = await q.order("created_at", desc=True).limit(2000).execute()
-    
+
     files = result.data if result.data else []
-    
+
     series_map = {}
     for f in files:
         # Filter for EPUB
         if not f.get("file_name", "").lower().endswith(".epub"):
             continue
-            
+
+        # Skip files that are in user-created series
+        if f.get("file_id") in exclude_file_ids:
+            continue
+
         metadata = f.get("metadata") or {}
         series_name = metadata.get("series") or f.get("file_name")
-        
+
         if series_name not in series_map:
             series_map[series_name] = {
                 "series": series_name,
@@ -1290,11 +1320,11 @@ async def get_book_series(user_id: int):
                 "latest_update": f.get("created_at"),
                 "first_book_id": f.get("id")
             }
-            
+
         series_map[series_name]["count"] += 1
         if f.get("created_at") > series_map[series_name]["latest_update"]:
             series_map[series_name]["latest_update"] = f["created_at"]
-            
+
     # Sort by latest update
     return sorted(series_map.values(), key=lambda x: x["latest_update"], reverse=True)
 

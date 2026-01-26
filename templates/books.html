@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#667eea">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="/static/nav.js"></script>
+    <script src="/static/bookmarks-series.js"></script>
     <style>
         /* Reuse styles from gallery/files */
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -72,6 +73,14 @@
             background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%);
         }
 
+        /* Completion badge */
+        .completion-badge {
+            position: absolute; top: 10px; left: 10px;
+            background: #4CAF50; color: #fff;
+            padding: 4px 10px; border-radius: 12px;
+            font-size: 12px; font-weight: 600;
+        }
+
         .book-info { padding: 15px; flex: 1; display: flex; flex-direction: column; }
         .book-title {
             font-weight: 600; font-size: 16px; margin-bottom: 5px;
@@ -112,10 +121,13 @@
             <button type="submit" class="search-btn">🔍</button>
         </form>
 
-        <div style="text-align: center; margin-bottom: 30px;">
+        <div style="text-align: center; margin-bottom: 30px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
             <a href="/books/{{ user_id }}" style="background: rgba(102, 126, 234, 0.5); padding: 8px 16px; color: #fff; border-radius: 20px; text-decoration: none; font-weight: bold;">
                 🔙 시리즈 뷰로 이동
             </a>
+            <button id="select-all-btn" onclick="toggleSelectAll()" style="background: rgba(76, 175, 80, 0.8); padding: 8px 16px; color: #fff; border: none; border-radius: 20px; cursor: pointer; font-weight: bold;">
+                ✓ 전체선택
+            </button>
         </div>
 
         {% if books %}
@@ -168,6 +180,39 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');
         }
+
+        // Load completion status for all books
+        async function loadBooksCompletion() {
+            const userId = {{ user_id }};
+            const cards = document.querySelectorAll('.book-card');
+
+            for (const card of cards) {
+                const fileId = card.getAttribute('onclick').match(/\/read\/(.+?)\?/)[1];
+
+                try {
+                    const isCompleted = await getCompletionStatus(userId, fileId, 'epub');
+                    if (isCompleted) {
+                        const cover = card.querySelector('.book-cover');
+                        const badge = document.createElement('div');
+                        badge.className = 'completion-badge';
+                        badge.textContent = '✓ 완료';
+                        cover.appendChild(badge);
+                    }
+                } catch (error) {
+                    console.error('Error loading completion for', fileId, error);
+                }
+            }
+        }
+
+        // Load completion badges on page load
+        if (document.querySelector('.book-card')) {
+            loadBooksCompletion();
+        }
+
+        // Initialize checkboxes on page load
+        window.addEventListener('DOMContentLoaded', function() {
+            initializeCheckboxes('epub');
+        });
     </script>
 </body>
 </html>
