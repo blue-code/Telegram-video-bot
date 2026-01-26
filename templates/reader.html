@@ -926,34 +926,934 @@
             }, 1000);
         }
 
-        // ============= TTS FUNCTIONALITY (Microsoft Edge TTS) =============
-        // TTS State
+        // ============= TTS FUNCTIONALITY (Sentence-Based Edge TTS) =============
+        // ============= VERSION 5.0 - Sentence-based TTS with 3-sentence prefetch =============
+
+        // TTS Debug Logger - Sends logs to server for file-based debugging
+        class TTSLogger {
+            constructor() {
+                this.enabled = true;
+                this.consoleEnabled = true;
+                this.serverEnabled = true;
+                this.sessionId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
+            }
+
+            async log(level, event, data = {}) {
+                const logData = {
+                    ...data,
+                    sessionId: this.sessionId,
+                    timestamp: new Date().toISOString()
+                };
+
+                // Console log
+                if (this.consoleEnabled) {
+                    const prefix = level === 'ERROR' ? '❌' : level === 'WARN' ? '⚠️' : level === 'DEBUG' ? '🔍' : '📝';
+                    console.log(`${prefix} [TTS ${event}]`, logData);
+                }
+
+                // Server log (fire and forget)
+                if (this.serverEnabled) {
+                    try {
+                        fetch('/api/tts/log', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ level, event, data: logData })
+                        }).catch(() => {}); // Ignore errors
+                    } catch (e) {}
+                }
+            }
+
+            debug(event, data) { this.log('DEBUG', event, data); }
+            info(event, data) { this.log('INFO', event, data); }
+            warn(event, data) { this.log('WARN', event, data); }
+            error(event, data) { this.log('ERROR', event, data); }
+        }
+
+        const ttsLog = new TTSLogger();
+
+        // TTS State - Basic
         let ttsPlaying = false;
         let ttsCurrentSpeed = 1.0;
         let ttsCurrentPitch = 1.0;
         let ttsCurrentVolume = 1.0;
-        let ttsCurrentVoice = 'ko-KR-SunHiNeural'; // Default to most natural Korean voice
-        let ttsAudioElement = null;
-        let ttsWordBoundaries = [];
-        let currentHighlightedElement = null;
-        let highlightTimeouts = [];
-        let ttsAlreadyReadText = null; // Text already read from CURRENT page (for overlap detection)
+        let ttsCurrentVoice = 'ko-KR-SunHiNeural';
 
-        // TTS Prefetch Cache - preload next page audio for seamless playback
-        let ttsPrefetchCache = null; // { text, audioBlob, wordBoundaries }
+        // TTS State - Sentence-based system
+        let ttsUseSentenceMode = true;
+        let ttsSentences = [];           // Array of all sentences from current page
+        let ttsCurrentSentenceIndex = 0; // Index of currently playing sentence
+        let ttsCurrentPageNumber = 0;    // Track page for cross-page sentences
+        let ttsRecentPageSignatures = [];
+        const MAX_PAGE_SIGNATURES = 20;
+        const MAX_PAGE_REPEAT_RETRIES = 2;
+
+        // TTS Prefetch Queue - 3 sentences ahead
+        let ttsPrefetchQueue = [];       // Array of { sentenceIndex, text, audioBlob, wordBoundaries }
+        const TTS_PREFETCH_AHEAD = 3;    // Prefetch 3 sentences ahead
         let ttsPrefetchInProgress = false;
-        let ttsPrefetchAborted = false; // Flag to abort prefetch operation on timeout
-        let isPrefetchMode = false; // Flag to prevent overlap detection during prefetch
-        let prefetchFailureCount = 0; // Track consecutive failures for circuit breaker
-        const MAX_PREFETCH_FAILURES = 3; // Disable prefetch after 3 consecutive failures
+
+        // TTS Highlight State
+        let ttsHighlightedSpan = null;   // Currently highlighted sentence span
+        let ttsWordBoundaries = [];      // Word boundaries for current sentence
+        let highlightTimeouts = [];      // Timeouts for word-level highlighting
+
+        // Page boundary handling
+        let ttsPendingPageTurn = false;  // Flag when sentence spans page boundary
+        let ttsNextPageSentences = [];   // Sentences from next page (for boundary handling)
+
+        // Legacy compatibility
+        let ttsAudioElement = null;
+        let currentHighlightedElement = null;
+        let ttsAlreadyReadText = null;
+        let ttsPrefetchCache = null;
+        let ttsPrefetchAborted = false;
+        let isPrefetchMode = false;
+        let prefetchFailureCount = 0;
+        const MAX_PREFETCH_FAILURES = 3;
 
         // Microsoft Edge Korean voices (fallback)
-        // NOTE: As of 2025, Microsoft Edge TTS only supports 3 Korean voices
         window.edgeKoreanVoices = [
             { name: 'ko-KR-SunHiNeural', label: '선희 (여성, 자연스러움)', gender: 'Female' },
             { name: 'ko-KR-InJoonNeural', label: '인준 (남성)', gender: 'Male' },
             { name: 'ko-KR-HyunsuMultilingualNeural', label: '현수 (남성, 다국어)', gender: 'Male' }
         ];
+
+        // ============= SENTENCE SPLITTING & PROCESSING =============
+
+        /**
+         * Split text into sentences using multiple delimiters
+         * Handles Korean, English, and mixed text
+         * @param {string} text - Input text to split
+         * @returns {Array<{text: string, startOffset: number, endOffset: number}>}
+         */
+        function splitIntoSentences(text) {
+            if (!text || text.trim().length === 0) return [];
+
+            ttsLog.debug('SENTENCE_SPLIT_START', { textLength: text.length, preview: text.substring(0, 100) });
+
+            // Sentence-ending patterns
+            // Korean: 다. 요. 까? 죠? 네! etc.
+            // English: . ? !
+            // Include closing quotes/brackets after punctuation
+            const sentenceEndPattern = /([.。!！?？]+[\s]*["'"'」』）\)]*)/g;
+
+            const sentences = [];
+            let lastIndex = 0;
+            let match;
+
+            // Find all sentence endings
+            while ((match = sentenceEndPattern.exec(text)) !== null) {
+                const endIndex = match.index + match[0].length;
+                const sentenceText = text.substring(lastIndex, endIndex).trim();
+
+                if (sentenceText.length > 0) {
+                    sentences.push({
+                        text: sentenceText,
+                        startOffset: lastIndex,
+                        endOffset: endIndex
+                    });
+                }
+                lastIndex = endIndex;
+            }
+
+            // Handle remaining text (if any)
+            const remaining = text.substring(lastIndex).trim();
+            if (remaining.length > 0) {
+                sentences.push({
+                    text: remaining,
+                    startOffset: lastIndex,
+                    endOffset: text.length
+                });
+            }
+
+            // If no sentences found, treat entire text as one sentence
+            if (sentences.length === 0 && text.trim().length > 0) {
+                sentences.push({
+                    text: text.trim(),
+                    startOffset: 0,
+                    endOffset: text.length
+                });
+            }
+
+            ttsLog.info('SENTENCE_SPLIT_COMPLETE', {
+                totalSentences: sentences.length,
+                sentences: sentences.map((s, i) => ({
+                    index: i,
+                    length: s.text.length,
+                    preview: s.text.substring(0, 50) + (s.text.length > 50 ? '...' : '')
+                }))
+            });
+
+            return sentences;
+        }
+
+        /**
+         * Generate TTS audio for a single sentence
+         * @param {string} sentenceText - Text to synthesize
+         * @returns {Promise<{audioBlob: Blob, wordBoundaries: Array}>}
+         */
+        async function generateSentenceAudio(sentenceText) {
+            const startTime = performance.now();
+
+            ttsLog.debug('AUDIO_GENERATE_START', {
+                textLength: sentenceText.length,
+                preview: sentenceText.substring(0, 80)
+            });
+
+            const ratePercent = Math.round((ttsCurrentSpeed - 1.0) * 100);
+            const rateStr = (ratePercent >= 0 ? '+' : '') + ratePercent + '%';
+            const pitchHz = Math.round((ttsCurrentPitch - 1.0) * 10);
+            const pitchStr = (pitchHz >= 0 ? '+' : '') + pitchHz + 'Hz';
+            const volumePercent = Math.round((ttsCurrentVolume - 1.0) * 100);
+            const volumeStr = (volumePercent >= 0 ? '+' : '') + volumePercent + '%';
+
+            const tts = new window.EdgeTTS(sentenceText, ttsCurrentVoice, {
+                rate: rateStr,
+                pitch: pitchStr,
+                volume: volumeStr
+            });
+
+            const result = await tts.synthesize();
+            const elapsed = performance.now() - startTime;
+
+            ttsLog.info('AUDIO_GENERATE_COMPLETE', {
+                textLength: sentenceText.length,
+                audioSize: result.audio.size,
+                wordCount: result.subtitle.length,
+                elapsedMs: Math.round(elapsed)
+            });
+
+            return {
+                audioBlob: result.audio,
+                wordBoundaries: result.subtitle
+            };
+        }
+
+        /**
+         * Prefetch audio for upcoming sentences (up to TTS_PREFETCH_AHEAD)
+         * Runs in background without blocking current playback
+         */
+        async function prefetchSentenceAudio() {
+            if (ttsPrefetchInProgress || !ttsPlaying) return;
+
+            const startIndex = ttsCurrentSentenceIndex + 1;
+            const endIndex = Math.min(startIndex + TTS_PREFETCH_AHEAD, ttsSentences.length);
+
+            // Check what's already in cache
+            const cachedIndices = ttsPrefetchQueue.map(q => q.sentenceIndex);
+            const needsPrefetch = [];
+
+            for (let i = startIndex; i < endIndex; i++) {
+                if (!cachedIndices.includes(i)) {
+                    needsPrefetch.push(i);
+                }
+            }
+
+            if (needsPrefetch.length === 0) {
+                ttsLog.debug('PREFETCH_SKIP', {
+                    reason: 'All upcoming sentences already cached',
+                    cachedIndices,
+                    currentIndex: ttsCurrentSentenceIndex
+                });
+                return;
+            }
+
+            ttsPrefetchInProgress = true;
+
+            ttsLog.info('PREFETCH_START', {
+                currentIndex: ttsCurrentSentenceIndex,
+                prefetchIndices: needsPrefetch,
+                queueSize: ttsPrefetchQueue.length
+            });
+
+            for (const sentenceIndex of needsPrefetch) {
+                if (!ttsPlaying) break; // Stop if playback stopped
+
+                try {
+                    const sentence = ttsSentences[sentenceIndex];
+                    if (!sentence) continue;
+
+                    ttsLog.debug('PREFETCH_SENTENCE', {
+                        sentenceIndex,
+                        textLength: sentence.text.length,
+                        preview: sentence.text.substring(0, 50)
+                    });
+
+                    const { audioBlob, wordBoundaries } = await generateSentenceAudio(sentence.text);
+
+                    // Add to queue
+                    ttsPrefetchQueue.push({
+                        sentenceIndex,
+                        text: sentence.text,
+                        audioBlob,
+                        wordBoundaries
+                    });
+
+                    ttsLog.info('PREFETCH_CACHED', {
+                        sentenceIndex,
+                        audioSize: audioBlob.size,
+                        queueSize: ttsPrefetchQueue.length
+                    });
+
+                } catch (error) {
+                    ttsLog.error('PREFETCH_ERROR', {
+                        sentenceIndex,
+                        error: error.message
+                    });
+                }
+            }
+
+            ttsPrefetchInProgress = false;
+
+            ttsLog.info('PREFETCH_COMPLETE', {
+                queueSize: ttsPrefetchQueue.length,
+                cachedIndices: ttsPrefetchQueue.map(q => q.sentenceIndex)
+            });
+        }
+
+        /**
+         * Get audio for a sentence (from cache or generate new)
+         * @param {number} sentenceIndex - Index of sentence
+         * @returns {Promise<{audioBlob: Blob, wordBoundaries: Array}|null>}
+         */
+        async function getSentenceAudio(sentenceIndex) {
+            // Check cache first
+            const cached = ttsPrefetchQueue.find(q => q.sentenceIndex === sentenceIndex);
+            if (cached) {
+                ttsLog.info('AUDIO_FROM_CACHE', {
+                    sentenceIndex,
+                    audioSize: cached.audioBlob.size
+                });
+                // Remove from cache after use
+                ttsPrefetchQueue = ttsPrefetchQueue.filter(q => q.sentenceIndex !== sentenceIndex);
+                return {
+                    audioBlob: cached.audioBlob,
+                    wordBoundaries: cached.wordBoundaries
+                };
+            }
+
+            // Generate new audio
+            const sentence = ttsSentences[sentenceIndex];
+            if (!sentence) {
+                ttsLog.warn('AUDIO_NO_SENTENCE', { sentenceIndex });
+                return null;
+            }
+
+            ttsLog.info('AUDIO_GENERATE_NEW', {
+                sentenceIndex,
+                reason: 'Not in cache'
+            });
+
+            return await generateSentenceAudio(sentence.text);
+        }
+
+        function normalizeTtsMatchText(text) {
+            return (text || '')
+                .replace(/\u00a0/g, ' ')
+                .replace(/\u200b/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+        }
+
+        function getPageSignature(text) {
+            const normalized = normalizeTtsMatchText(text);
+            return normalized.substring(0, 120);
+        }
+
+        function rememberPageSignature(text) {
+            const signature = getPageSignature(text);
+            if (!signature) return null;
+            ttsRecentPageSignatures.push(signature);
+            if (ttsRecentPageSignatures.length > MAX_PAGE_SIGNATURES) {
+                ttsRecentPageSignatures.shift();
+            }
+            return signature;
+        }
+
+        function hasSeenPageSignature(text) {
+            const signature = getPageSignature(text);
+            if (!signature) return false;
+            return ttsRecentPageSignatures.includes(signature);
+        }
+
+        function waitForRelocatedOnce(timeoutMs = 1500) {
+            return new Promise(resolve => {
+                if (!window.rendition || !window.rendition.on) {
+                    resolve(null);
+                    return;
+                }
+                let settled = false;
+                const handler = (location) => {
+                    if (settled) return;
+                    settled = true;
+                    window.rendition.off('relocated', handler);
+                    resolve(location);
+                };
+                window.rendition.on('relocated', handler);
+                setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    window.rendition.off('relocated', handler);
+                    resolve(null);
+                }, timeoutMs);
+            });
+        }
+
+        function escapeRegExp(value) {
+            return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        }
+
+        function findLooseMatchIndex(haystack, needle) {
+            if (!haystack || !needle) return -1;
+            const parts = needle.split(' ').filter(Boolean).map(escapeRegExp);
+            if (parts.length === 0) return -1;
+            const regex = new RegExp(parts.join('\\s+'));
+            const match = haystack.match(regex);
+            return match ? match.index : -1;
+        }
+
+        /**
+         * Highlight current sentence in the EPUB content
+         * @param {number} sentenceIndex - Index of sentence to highlight
+         */
+        function highlightCurrentSentence(sentenceIndex) {
+            // Clear previous highlight
+            clearSentenceHighlight();
+
+            const sentence = ttsSentences[sentenceIndex];
+            if (!sentence) return;
+
+            try {
+                const iframe = document.querySelector('iframe');
+                if (!iframe || !iframe.contentDocument) return;
+
+                const doc = iframe.contentDocument;
+                const body = doc.body;
+
+                // Find text in the document (normalized to handle line breaks/spacing differences)
+                const normalizedSentence = normalizeTtsMatchText(sentence.text);
+                const textToFind = normalizedSentence.substring(0, 100);
+                const matchKey = normalizedSentence.substring(0, 30);
+                const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null, false);
+
+                let found = false;
+                while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    const nodeText = node.textContent || '';
+                    const normalizedNodeText = normalizeTtsMatchText(nodeText);
+
+                    if (normalizedNodeText.includes(matchKey)) {
+                        // Found matching text node, wrap in highlight span
+                        const span = doc.createElement('span');
+                        span.className = 'tts-sentence-highlight';
+                        span.style.backgroundColor = 'rgba(102, 126, 234, 0.3)';
+                        span.style.borderRadius = '3px';
+                        span.style.padding = '2px 0';
+                        span.style.transition = 'background-color 0.3s ease';
+
+                        // Try to wrap just the sentence text
+                        const startIdx = findLooseMatchIndex(nodeText, matchKey);
+                        if (startIdx >= 0) {
+                            const range = doc.createRange();
+                            range.setStart(node, startIdx);
+                            range.setEnd(node, Math.min(startIdx + sentence.text.length, nodeText.length));
+
+                            try {
+                                range.surroundContents(span);
+                                ttsHighlightedSpan = span;
+                                found = true;
+
+                                // Scroll into view
+                                span.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            } catch (e) {
+                                // Range spans multiple nodes, fall back to parent highlight
+                                const parent = node.parentElement;
+                                if (parent) {
+                                    parent.classList.add('tts-highlight');
+                                    ttsHighlightedSpan = parent;
+                                    found = true;
+                                }
+                            }
+                        } else {
+                            const parent = node.parentElement;
+                            if (parent) {
+                                parent.classList.add('tts-highlight');
+                                ttsHighlightedSpan = parent;
+                                found = true;
+                            }
+                        }
+                        break;
+                    }
+                }
+
+                ttsLog.debug('HIGHLIGHT_SENTENCE', {
+                    sentenceIndex,
+                    found,
+                    preview: sentence.text.substring(0, 50)
+                });
+
+            } catch (error) {
+                ttsLog.error('HIGHLIGHT_ERROR', {
+                    sentenceIndex,
+                    error: error.message
+                });
+            }
+        }
+
+        /**
+         * Clear sentence highlight
+         */
+        function clearSentenceHighlight() {
+            if (ttsHighlightedSpan) {
+                try {
+                    if (ttsHighlightedSpan.classList) {
+                        ttsHighlightedSpan.classList.remove('tts-highlight', 'tts-sentence-highlight');
+                    }
+                    ttsHighlightedSpan.style.backgroundColor = '';
+
+                    // If we created a wrapper span, unwrap it
+                    if (ttsHighlightedSpan.className === 'tts-sentence-highlight') {
+                        const parent = ttsHighlightedSpan.parentNode;
+                        while (ttsHighlightedSpan.firstChild) {
+                            parent.insertBefore(ttsHighlightedSpan.firstChild, ttsHighlightedSpan);
+                        }
+                        parent.removeChild(ttsHighlightedSpan);
+                    }
+                } catch (e) {}
+                ttsHighlightedSpan = null;
+            }
+
+            // Clear word-level highlight timeouts
+            highlightTimeouts.forEach(t => clearTimeout(t));
+            highlightTimeouts = [];
+        }
+
+        /**
+         * Check if sentence spans across page boundary
+         * @param {number} sentenceIndex - Index of sentence
+         * @returns {Promise<boolean>}
+         */
+        async function checkPageBoundary(sentenceIndex) {
+            const sentence = ttsSentences[sentenceIndex];
+            if (!sentence) return false;
+
+            try {
+                const iframe = document.querySelector('iframe');
+                if (!iframe || !iframe.contentDocument) return false;
+
+                const doc = iframe.contentDocument;
+                const viewportHeight = iframe.clientHeight;
+
+                // Find sentence position
+                const walker = document.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT, null, false);
+                const normalizedSentence = normalizeTtsMatchText(sentence.text);
+                const textToFind = normalizedSentence.substring(0, 50);
+                const matchKey = normalizedSentence.substring(0, 30);
+
+                while (walker.nextNode()) {
+                    const node = walker.currentNode;
+                    const nodeText = node.textContent || '';
+                    const normalizedNodeText = normalizeTtsMatchText(nodeText);
+                    if (normalizedNodeText.includes(matchKey)) {
+                        const range = doc.createRange();
+                        range.selectNode(node);
+                        const rect = range.getBoundingClientRect();
+
+                        // Check if bottom of text is below viewport
+                        if (rect.bottom > viewportHeight) {
+                            ttsLog.info('PAGE_BOUNDARY_DETECTED', {
+                                sentenceIndex,
+                                rectBottom: rect.bottom,
+                                viewportHeight,
+                                textPreview: textToFind
+                            });
+                            return true;
+                        }
+                        break;
+                    }
+                }
+            } catch (error) {
+                ttsLog.error('PAGE_BOUNDARY_CHECK_ERROR', { error: error.message });
+            }
+
+            return false;
+        }
+
+        /**
+         * Play current sentence and advance to next
+         */
+        async function playSentence() {
+            if (!ttsPlaying) return;
+
+            if (ttsCurrentSentenceIndex >= ttsSentences.length) {
+                // All sentences on current page done, turn page
+                ttsLog.info('PAGE_COMPLETE', {
+                    totalSentences: ttsSentences.length,
+                    currentIndex: ttsCurrentSentenceIndex
+                });
+                await handlePageTurnAfterSentence();
+                return;
+            }
+
+            const sentence = ttsSentences[ttsCurrentSentenceIndex];
+
+            // Skip incomplete sentences at end of page (will be merged with next page)
+            const isLastSentence = ttsCurrentSentenceIndex === ttsSentences.length - 1;
+            const isIncomplete = sentence.text.length < 10 && !sentence.text.match(/[.!?。！？]$/);
+
+            if (isLastSentence && isIncomplete) {
+                ttsLog.info('SKIP_INCOMPLETE_SENTENCE', {
+                    sentenceIndex: ttsCurrentSentenceIndex,
+                    text: sentence.text,
+                    reason: 'Will merge with next page'
+                });
+                // Move to page turn
+                ttsCurrentSentenceIndex++;
+                await handlePageTurnAfterSentence();
+                return;
+            }
+
+            ttsLog.info('PLAY_SENTENCE_START', {
+                sentenceIndex: ttsCurrentSentenceIndex,
+                totalSentences: ttsSentences.length,
+                textLength: sentence.text.length,
+                preview: sentence.text.substring(0, 80),
+                prefetchQueueSize: ttsPrefetchQueue.length
+            });
+
+            updateTTSStatus(`읽는 중... (${ttsCurrentSentenceIndex + 1}/${ttsSentences.length})`);
+
+            // Highlight current sentence
+            highlightCurrentSentence(ttsCurrentSentenceIndex);
+
+            try {
+                // Get audio (from cache or generate)
+                const audioData = await getSentenceAudio(ttsCurrentSentenceIndex);
+                if (!audioData) {
+                    ttsLog.error('PLAY_SENTENCE_NO_AUDIO', { sentenceIndex: ttsCurrentSentenceIndex });
+                    ttsCurrentSentenceIndex++;
+                    playSentence(); // Try next sentence
+                    return;
+                }
+
+                const { audioBlob, wordBoundaries } = audioData;
+                ttsWordBoundaries = wordBoundaries;
+
+                // Start prefetching next sentences in background
+                prefetchSentenceAudio();
+
+                // Play audio
+                await window.audioController.play(
+                    audioBlob,
+                    ttsCurrentVolume,
+                    // onPlay
+                    () => {
+                        ttsLog.debug('AUDIO_PLAYBACK_STARTED', {
+                            sentenceIndex: ttsCurrentSentenceIndex
+                        });
+                    },
+                    // onEnded
+                    async () => {
+                        ttsLog.info('SENTENCE_COMPLETE', {
+                            sentenceIndex: ttsCurrentSentenceIndex,
+                            nextIndex: ttsCurrentSentenceIndex + 1,
+                            totalSentences: ttsSentences.length
+                        });
+
+                        // Clear highlight
+                        clearSentenceHighlight();
+
+                        // Move to next sentence
+                        ttsCurrentSentenceIndex++;
+
+                        // Check if we need to turn page
+                        if (ttsCurrentSentenceIndex >= ttsSentences.length) {
+                            // Page complete, turn to next page
+                            await handlePageTurnAfterSentence();
+                        } else {
+                            // Play next sentence
+                            if (ttsPlaying) {
+                                playSentence();
+                            }
+                        }
+                    },
+                    // onError
+                    (error) => {
+                        ttsLog.error('AUDIO_PLAYBACK_ERROR', {
+                            sentenceIndex: ttsCurrentSentenceIndex,
+                            error: error?.message || 'Unknown error'
+                        });
+                        ttsCurrentSentenceIndex++;
+                        if (ttsPlaying) playSentence();
+                    }
+                );
+
+            } catch (error) {
+                ttsLog.error('PLAY_SENTENCE_ERROR', {
+                    sentenceIndex: ttsCurrentSentenceIndex,
+                    error: error.message
+                });
+                ttsCurrentSentenceIndex++;
+                if (ttsPlaying) playSentence();
+            }
+        }
+
+        /**
+         * Handle page turn after completing all sentences
+         */
+        // Store incomplete sentence fragment from previous page
+        let ttsCarryOverText = '';
+
+        async function handlePageTurnAfterSentence() {
+            if (!ttsPlaying) return;
+
+            // Check if last sentence was incomplete (too short - likely cut off)
+            const lastSentence = ttsSentences[ttsSentences.length - 1];
+            const isIncomplete = lastSentence && lastSentence.text.length < 10 &&
+                                 !lastSentence.text.match(/[.!?。！？]$/);
+
+            if (isIncomplete) {
+                ttsCarryOverText = lastSentence.text;
+                ttsLog.info('INCOMPLETE_SENTENCE_DETECTED', {
+                    text: ttsCarryOverText,
+                    length: ttsCarryOverText.length
+                });
+            } else {
+                ttsCarryOverText = '';
+            }
+
+            // Get current location before page turn
+            let beforeLocation = null;
+            let beforePercentage = null;
+            try {
+                beforeLocation = window.rendition.currentLocation();
+                beforePercentage = beforeLocation?.start?.percentage ?? null;
+                ttsLog.info('PAGE_TURN_START', {
+                    completedSentences: ttsSentences.length,
+                    carryOver: ttsCarryOverText,
+                    beforeCfi: beforeLocation?.start?.cfi || 'unknown',
+                    beforePercentage
+                });
+            } catch (e) {
+                ttsLog.info('PAGE_TURN_START', {
+                    completedSentences: ttsSentences.length,
+                    carryOver: ttsCarryOverText
+                });
+            }
+
+            updateTTSStatus('다음 페이지로 이동 중...');
+
+            try {
+                let attempts = 0;
+                while (attempts <= MAX_PAGE_REPEAT_RETRIES && ttsPlaying) {
+                    // Turn to next page
+                    await window.rendition.next();
+
+                    // Wait for relocation to settle
+                    await waitForRelocatedOnce();
+                    await new Promise(resolve => setTimeout(resolve, 150));
+
+                    // Get location after page turn
+                    let afterLocation = null;
+                    let afterPercentage = null;
+                    try {
+                        afterLocation = window.rendition.currentLocation();
+                        afterPercentage = afterLocation?.start?.percentage ?? null;
+                        const beforeCfi = beforeLocation?.start?.cfi || '';
+                        const afterCfi = afterLocation?.start?.cfi || '';
+
+                        ttsLog.debug('PAGE_TURN_LOCATION', {
+                            beforeCfi: beforeCfi,
+                            afterCfi: afterCfi,
+                            beforePercentage,
+                            afterPercentage
+                        });
+
+                        if (beforePercentage !== null && afterPercentage !== null) {
+                            const percentDrop = beforePercentage - afterPercentage;
+                            if (percentDrop > 0.05) {
+                                ttsLog.warn('BOOK_CYCLE_DETECTED', {
+                                    beforePercentage,
+                                    afterPercentage,
+                                    percentDrop
+                                });
+                                ttsLog.info('BOOK_COMPLETE', { reason: 'Percentage decreased after page turn' });
+                                updateTTSStatus('읽기 완료 (책 끝)');
+                                stopTTS();
+                                return;
+                            }
+                        }
+
+                        // Detect if we went backwards (book cycling)
+                        // Compare CFI path numbers - if after < before, we likely cycled to start
+                        const beforeMatch = beforeCfi.match(/\/(\d+)!/);
+                        const afterMatch = afterCfi.match(/\/(\d+)!/);
+                        const beforeNum = beforeMatch ? parseInt(beforeMatch[1]) : 0;
+                        const afterNum = afterMatch ? parseInt(afterMatch[1]) : 0;
+
+                        // Also check inner path
+                        const beforeInner = beforeCfi.match(/!\/4\/(\d+)/);
+                        const afterInner = afterCfi.match(/!\/4\/(\d+)/);
+                        const beforeInnerNum = beforeInner ? parseInt(beforeInner[1]) : 0;
+                        const afterInnerNum = afterInner ? parseInt(afterInner[1]) : 0;
+
+                        if (afterNum < beforeNum || (afterNum === beforeNum && afterInnerNum < beforeInnerNum)) {
+                            ttsLog.warn('BOOK_CYCLE_DETECTED', {
+                                beforeCfi: beforeCfi,
+                                afterCfi: afterCfi,
+                                beforeNum: beforeNum,
+                                afterNum: afterNum,
+                                beforeInnerNum: beforeInnerNum,
+                                afterInnerNum: afterInnerNum
+                            });
+                            // Book has cycled to beginning - stop TTS
+                            ttsLog.info('BOOK_COMPLETE', { reason: 'Reached end, cycled to start' });
+                            updateTTSStatus('읽기 완료 (책 끝)');
+                            stopTTS();
+                            return;
+                        }
+                    } catch (e) {
+                        ttsLog.warn('CFI_COMPARE_ERROR', { error: e.message });
+                    }
+
+                    // Extract text from new page
+                    const { cleanText } = await extractPageText();
+
+                    if (cleanText && hasSeenPageSignature(cleanText)) {
+                        ttsLog.warn('PAGE_REPEAT_DETECTED', {
+                            attempt: attempts,
+                            signature: getPageSignature(cleanText)
+                        });
+                        attempts += 1;
+                        if (attempts > MAX_PAGE_REPEAT_RETRIES) {
+                            ttsLog.info('BOOK_COMPLETE', { reason: 'Repeated page content after retries' });
+                            updateTTSStatus('읽기 완료 (반복 감지)');
+                            stopTTS();
+                            return;
+                        }
+                        continue;
+                    }
+                    rememberPageSignature(cleanText);
+
+                    if (!cleanText || cleanText.length < 10) {
+                        // Try one more page (might be image-only page)
+                        ttsLog.info('EMPTY_PAGE_SKIP', { reason: 'No text on page' });
+                        attempts += 1;
+                        if (attempts > MAX_PAGE_REPEAT_RETRIES) {
+                            ttsLog.info('BOOK_COMPLETE', { reason: 'No more text after retry' });
+                            updateTTSStatus('읽기 완료');
+                            stopTTS();
+                            return;
+                        }
+                        continue;
+                    }
+
+                    processNewPageText(cleanText);
+                    return;
+                }
+            } catch (error) {
+                ttsLog.error('PAGE_TURN_ERROR', { error: error.message });
+                updateTTSStatus('페이지 전환 오류');
+                stopTTS();
+            }
+        }
+
+        function processNewPageText(cleanText) {
+            // If we have carry-over text, prepend it to first sentence
+            let textToProcess = cleanText;
+            if (ttsCarryOverText) {
+                textToProcess = ttsCarryOverText + cleanText;
+                ttsLog.info('MERGED_CARRYOVER', {
+                    carryOver: ttsCarryOverText,
+                    newTextStart: cleanText.substring(0, 30),
+                    mergedStart: textToProcess.substring(0, 50)
+                });
+                ttsCarryOverText = '';
+            }
+
+            // Split into sentences
+            ttsSentences = splitIntoSentences(textToProcess);
+            ttsCurrentSentenceIndex = 0;
+            ttsPrefetchQueue = []; // Clear old prefetch queue
+
+            ttsLog.info('NEW_PAGE_READY', {
+                sentenceCount: ttsSentences.length,
+                firstSentence: ttsSentences[0]?.text.substring(0, 50)
+            });
+
+            // Start playing new page
+            if (ttsPlaying) {
+                playSentence();
+            }
+        }
+
+        /**
+         * Start TTS playback from current page
+         */
+        async function startSentenceBasedTTS() {
+            ttsUseSentenceMode = true;
+            ttsLog.info('TTS_START', { voice: ttsCurrentVoice, speed: ttsCurrentSpeed });
+
+            // Clear log at start
+            try {
+                await fetch('/api/tts/log', { method: 'DELETE' });
+            } catch (e) {}
+
+            ttsLog.info('SESSION_START', {
+                voice: ttsCurrentVoice,
+                speed: ttsCurrentSpeed,
+                pitch: ttsCurrentPitch,
+                volume: ttsCurrentVolume
+            });
+
+            // Extract text from current page
+            const { cleanText, fullReadText } = await extractPageText();
+
+            if (!cleanText || cleanText.length < 10) {
+                ttsLog.warn('NO_TEXT', { reason: 'Page has no readable text, auto-advancing' });
+                updateTTSStatus('텍스트 없음 - 다음 페이지로 이동');
+
+                // Auto-advance to next page
+                if (window.rendition && window.rendition.next) {
+                    ttsLog.info('AUTO_PAGE_TURN', { reason: 'no_text' });
+                    await window.rendition.next();
+
+                    // Small delay for page render
+                    await new Promise(resolve => setTimeout(resolve, 300));
+
+                    // Retry TTS on new page (with recursion limit)
+                    if (!window.ttsEmptyPageCount) window.ttsEmptyPageCount = 0;
+                    window.ttsEmptyPageCount++;
+
+                    if (window.ttsEmptyPageCount < 10) {
+                        ttsLog.info('RETRY_TTS_AFTER_PAGE_TURN', { emptyPageCount: window.ttsEmptyPageCount });
+                        await startSentenceBasedTTS();
+                    } else {
+                        ttsLog.warn('MAX_EMPTY_PAGES', { count: window.ttsEmptyPageCount });
+                        updateTTSStatus('연속 빈 페이지 - TTS 중지');
+                        window.ttsEmptyPageCount = 0;
+                        stopTTS();
+                    }
+                }
+                return;
+            }
+
+            // Reset empty page counter on successful text extraction
+            window.ttsEmptyPageCount = 0;
+
+            // Split into sentences
+            ttsSentences = splitIntoSentences(cleanText);
+            ttsCurrentSentenceIndex = 0;
+            ttsPrefetchQueue = [];
+
+            ttsLog.info('SENTENCES_READY', {
+                totalSentences: ttsSentences.length,
+                totalChars: cleanText.length
+            });
+
+            // Start playing first sentence
+            playSentence();
+        }
 
         // Initialize TTS when page loads
         window.addEventListener('load', initializeTTS);
@@ -1063,19 +1963,25 @@
             console.log(`✅ ${voices.length}개 음성 UI 로드됨 (선택: ${ttsCurrentVoice})`);
         }
 
-        // Toggle play/pause
+        // Toggle play/pause - Uses new sentence-based TTS system
         async function toggleTTSPlayPause() {
             const playPauseBtn = document.getElementById('tts-play-pause');
             if (!playPauseBtn) return;
 
             if (!ttsPlaying) {
-                // Start playing
+                // Start playing - use new sentence-based system
                 playPauseBtn.textContent = '⏸ 일시정지';
                 playPauseBtn.classList.add('playing');
                 ttsPlaying = true;
-                await playCurrentPage();
+
+                ttsLog.info('USER_START_TTS', { action: 'play' });
+
+                // Use sentence-based TTS
+                await startSentenceBasedTTS();
             } else {
                 // Pause/Stop
+                ttsLog.info('USER_STOP_TTS', { action: 'stop' });
+
                 stopTTS();
                 playPauseBtn.textContent = '▶ 읽기 시작';
                 playPauseBtn.classList.remove('playing');
@@ -1083,9 +1989,9 @@
             }
         }
 
-        // Stop TTS playback
+        // Stop TTS playback - handles both legacy and sentence-based systems
         function stopTTS() {
-            console.log('🛑 Stopping Edge TTS playback');
+            ttsLog.info('STOP_TTS', { reason: 'User or system stop' });
 
             // Stop audio via Controller
             if (window.audioController) {
@@ -1101,29 +2007,37 @@
             highlightTimeouts.forEach(timeout => clearTimeout(timeout));
             highlightTimeouts = [];
 
-            // Remove highlight
+            // Clear sentence highlight (new system)
+            clearSentenceHighlight();
+
+            // Remove legacy highlight
             if (currentHighlightedElement) {
                 try {
                     currentHighlightedElement.style.backgroundColor = '';
-                } catch (e) {
-                    console.warn('Error removing highlight:', e);
-                }
+                } catch (e) {}
                 currentHighlightedElement = null;
             }
 
-            // Clear saved already-read text (user stopped, reset)
-            ttsAlreadyReadText = null;
+            // Clear sentence-based state (new system)
+            ttsSentences = [];
+            ttsCurrentSentenceIndex = 0;
+            ttsPrefetchQueue = [];
+            ttsPendingPageTurn = false;
+            ttsNextPageSentences = [];
 
-            // Clear prefetch cache
+            // Clear legacy state
+            ttsAlreadyReadText = null;
             ttsPrefetchCache = null;
             ttsPrefetchInProgress = false;
             isPrefetchMode = false;
-
-            // Reset circuit breaker on manual stop
             prefetchFailureCount = 0;
 
             ttsPlaying = false;
-            console.log('✅ TTS stopped and state cleared (circuit breaker reset)');
+
+            ttsLog.info('STOP_TTS_COMPLETE', {
+                sentencesCleared: true,
+                prefetchQueueCleared: true
+            });
         }
 
         // Check if text ends with sentence ending punctuation
@@ -1458,6 +2372,9 @@
 
         // Prefetch next page TTS audio in background
         async function prefetchNextPageTTS() {
+            if (ttsUseSentenceMode) {
+                return;
+            }
             if (ttsPrefetchInProgress || !ttsPlaying) {
                 return;
             }
@@ -1730,6 +2647,9 @@
 
         // Play prefetched audio from cache (instant playback)
         async function playPrefetchedAudio() {
+            if (ttsUseSentenceMode) {
+                return;
+            }
             if (!ttsPrefetchCache) {
                 console.warn('No prefetch cache available, falling back to normal playback');
                 playCurrentPage();
@@ -1870,6 +2790,9 @@
         // Play TTS for current page using Edge TTS
         // Supports chunking for long text and skipping empty pages
         async function playCurrentPage() {
+            if (ttsUseSentenceMode) {
+                return;
+            }
             // Wait a bit to ensure rendition layout is stable
             await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -1938,6 +2861,9 @@
         // cleanText: Text to play (chunked from this)
         // fullReadText: Complete text with sentence completion (for overlap detection)
         async function playChunks(chunks, index, cleanText, fullReadText) {
+            if (ttsUseSentenceMode) {
+                return;
+            }
             if (!ttsPlaying) return;
 
             if (index >= chunks.length) {
