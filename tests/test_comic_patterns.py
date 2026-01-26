@@ -41,3 +41,14 @@ class TestComicPatterns(unittest.TestCase):
         series, vol = extract_series_info("제목 (01).zip")
         self.assertEqual(series, "제목")
         self.assertEqual(vol, 1)
+
+    def test_new_pattern_space_number(self):
+        # "Karamitsuku Shisen 휘감기는 시선 1.zip" -> "Karamitsuku Shisen 휘감기는 시선", 1
+        series, vol = extract_series_info("Karamitsuku Shisen 휘감기는 시선 1.zip")
+        self.assertEqual(series, "Karamitsuku Shisen 휘감기는 시선")
+        self.assertEqual(vol, 1)
+
+        # "제목 2.zip" -> "제목", 2
+        series, vol = extract_series_info("제목 2.zip")
+        self.assertEqual(series, "제목")
+        self.assertEqual(vol, 2)
