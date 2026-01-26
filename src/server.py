@@ -4045,6 +4045,106 @@ async def get_tts_voices():
     return {"voices": voices}
 
 
+# TTS Debug Log File Path
+TTS_DEBUG_LOG_PATH = os.path.join(os.path.dirname(__file__), "..", "logs", "tts_debug.log")
+
+
+@app.post("/api/tts/log")
+async def log_tts_debug(
+    level: str = Body("INFO", embed=True),
+    event: str = Body(..., embed=True),
+    data: dict = Body(None, embed=True)
+):
+    """
+    TTS Debug Logging Endpoint
+
+    Logs TTS events to a dedicated log file for debugging sentence-based TTS.
+
+    Args:
+        level: Log level (DEBUG, INFO, WARN, ERROR)
+        event: Event type (e.g., SENTENCE_SPLIT, PREFETCH_START, AUDIO_PLAY)
+        data: Additional data (sentence_index, text_preview, prefetch_queue, etc.)
+    """
+    import json
+    from datetime import datetime
+
+    try:
+        # Ensure logs directory exists
+        log_dir = os.path.dirname(TTS_DEBUG_LOG_PATH)
+        os.makedirs(log_dir, exist_ok=True)
+
+        # Format log entry
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        log_entry = {
+            "timestamp": timestamp,
+            "level": level.upper(),
+            "event": event,
+            "data": data or {}
+        }
+
+        # Ensure UTF-8 BOM on first create for Windows log viewers
+        if not os.path.exists(TTS_DEBUG_LOG_PATH):
+            with open(TTS_DEBUG_LOG_PATH, "w", encoding="utf-8-sig"):
+                pass
+
+        # Write to log file
+        with open(TTS_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
+
+        return {"success": True}
+
+    except Exception as e:
+        logger.error(f"TTS log error: {e}")
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/tts/log")
+async def get_tts_debug_log(lines: int = 100):
+    """
+    Get recent TTS debug log entries
+
+    Args:
+        lines: Number of recent lines to return (default: 100)
+    """
+    import json
+
+    try:
+        if not os.path.exists(TTS_DEBUG_LOG_PATH):
+            return {"logs": [], "message": "No log file found"}
+
+        with open(TTS_DEBUG_LOG_PATH, "r", encoding="utf-8-sig") as f:
+            all_lines = f.readlines()
+
+        # Get last N lines
+        recent_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+
+        # Parse JSON entries
+        logs = []
+        for line in recent_lines:
+            try:
+                logs.append(json.loads(line.strip()))
+            except:
+                logs.append({"raw": line.strip()})
+
+        return {"logs": logs, "total_lines": len(all_lines)}
+
+    except Exception as e:
+        logger.error(f"TTS log read error: {e}")
+        return {"logs": [], "error": str(e)}
+
+
+@app.delete("/api/tts/log")
+async def clear_tts_debug_log():
+    """Clear TTS debug log file"""
+    try:
+        if os.path.exists(TTS_DEBUG_LOG_PATH):
+            os.remove(TTS_DEBUG_LOG_PATH)
+        return {"success": True, "message": "Log file cleared"}
+    except Exception as e:
+        logger.error(f"TTS log clear error: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # ============== COMIC BOOK ROUTES ==============
 
 @app.get("/comics/files/{user_id}", response_class=HTMLResponse)
