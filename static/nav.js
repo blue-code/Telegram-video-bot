@@ -5,117 +5,102 @@
     // 네비게이션 HTML 생성
     function createNavigation(userId, currentPage = '') {
         const navHTML = `
+            <link rel="stylesheet" href="/static/theme.css">
             <style>
-                /* iPhone Safari 호환성 */
-                html, body {
-                    overflow-x: hidden;
-                    position: relative;
-                }
-
                 .tvb-nav {
-                    background: rgba(0,0,0,0.35);
-                    backdrop-filter: blur(10px);
-                    -webkit-backdrop-filter: blur(10px);
-                    padding: 12px 16px;
-                    border-radius: 12px;
-                    margin-bottom: 20px;
-                    position: relative;
+                    background: var(--bg-glass);
+                    backdrop-filter: var(--blur-glass);
+                    -webkit-backdrop-filter: var(--blur-glass);
+                    padding: 12px 0;
+                    border-bottom: 1px solid var(--border-subtle);
+                    position: sticky;
+                    top: 0;
                     z-index: 1000;
+                    margin-bottom: 30px;
                 }
 
                 .tvb-nav-container {
+                    max-width: 1400px;
+                    margin: 0 auto;
+                    padding: 0 20px;
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
-                    position: relative;
-                    z-index: 1001;
                 }
 
                 .tvb-nav-brand {
-                    font-weight: 700;
-                    color: #fff;
+                    font-weight: 800;
+                    color: var(--text-primary);
                     text-decoration: none;
-                    font-size: 20px;
-                    flex-shrink: 0;
+                    font-size: 1.25rem;
+                    letter-spacing: -0.02em;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
                 }
 
                 .tvb-nav-toggle {
                     display: none;
-                    background: rgba(255,255,255,0.1);
-                    border: 2px solid rgba(255,255,255,0.2);
-                    border-radius: 8px;
-                    color: #fff;
-                    font-size: 24px;
+                    background: transparent;
+                    border: 1px solid var(--border-subtle);
+                    border-radius: var(--radius-sm);
+                    color: var(--text-primary);
+                    font-size: 1.5rem;
                     cursor: pointer;
-                    padding: 8px 12px;
-                    transition: all 0.3s;
-                    -webkit-tap-highlight-color: transparent;
+                    padding: 4px 8px;
+                    transition: all 0.2s;
                 }
 
-                .tvb-nav-toggle:active {
-                    background: rgba(255,255,255,0.3);
-                    transform: scale(0.95);
+                .tvb-nav-toggle:hover {
+                    background: var(--bg-surface);
+                    border-color: var(--border-active);
                 }
 
                 .tvb-nav-links {
                     display: flex;
-                    gap: 5px;
+                    gap: 4px;
                     align-items: center;
-                    flex-wrap: wrap; /* 허용된 공간 내 줄바꿈 */
                 }
 
                 .tvb-nav-links a {
-                    color: #fff;
+                    color: var(--text-secondary);
                     text-decoration: none;
-                    font-size: 14px;
-                    padding: 6px 12px;
-                    border-radius: 999px;
-                    background: rgba(255,255,255,0.08);
-                    white-space: nowrap;
-                    transition: all 0.3s;
+                    font-size: 0.875rem;
+                    font-weight: 500;
+                    padding: 8px 12px;
+                    border-radius: var(--radius-full);
+                    transition: all 0.2s ease;
                 }
 
                 .tvb-nav-links a:hover {
-                    background: rgba(255,255,255,0.25);
+                    color: var(--text-primary);
+                    background: rgba(255, 255, 255, 0.05);
                 }
 
                 .tvb-nav-links a.active {
-                    background: rgba(102, 126, 234, 0.5);
+                    color: var(--bg-app);
+                    background: var(--text-primary);
                     font-weight: 600;
-                    border: 1px solid rgba(102, 126, 234, 0.8);
                 }
 
                 /* 모바일 메뉴 (768px 이하) */
                 @media (max-width: 768px) {
-                    .tvb-nav {
-                        position: relative;
-                        isolation: isolate;
-                    }
-
                     .tvb-nav-toggle {
                         display: block;
-                        z-index: 10001;
-                        position: relative;
                     }
 
                     .tvb-nav-links {
                         display: none;
-                        position: fixed;
-                        top: 70px;
-                        left: 10px;
-                        right: 10px;
-                        width: calc(100vw - 20px);
+                        position: absolute;
+                        top: 100%;
+                        left: 0;
+                        right: 0;
                         flex-direction: column;
-                        background: #1a1a1a;
-                        border-radius: 12px;
+                        background: var(--bg-app);
+                        border-bottom: 1px solid var(--border-subtle);
                         padding: 16px;
                         gap: 8px;
-                        z-index: 10000;
-                        box-shadow: 0 20px 60px rgba(0,0,0,0.9);
-                        border: 2px solid rgba(255,255,255,0.2);
-                        transform: translateZ(0);
-                        -webkit-transform: translateZ(0);
-                        pointer-events: auto;
+                        align-items: stretch;
                     }
 
                     .tvb-nav-links.open {
@@ -123,26 +108,17 @@
                     }
 
                     .tvb-nav-links a {
-                        width: 100%;
                         text-align: center;
-                        padding: 14px 12px;
-                        font-size: 16px;
-                        display: block;
-                        border-radius: 8px;
-                        background: rgba(255,255,255,0.05);
-                        pointer-events: auto;
-                        cursor: pointer;
+                        padding: 12px;
+                        border-radius: var(--radius-md);
+                        background: var(--bg-surface);
+                        border: 1px solid var(--border-subtle);
                     }
-
-                    .tvb-nav-links a:active {
-                        background: rgba(255,255,255,0.2);
-                    }
-                }
-
-                /* 작은 태블릿 (600px 이하) */
-                @media (max-width: 600px) {
-                    .tvb-nav-brand {
-                        font-size: 18px;
+                    
+                    .tvb-nav-links a.active {
+                        background: var(--text-primary);
+                        color: var(--bg-app);
+                        border-color: var(--text-primary);
                     }
                 }
             </style>

@@ -1,0 +1,220 @@
+/* TVB Design System - Silicon Valley Standard */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+:root {
+    /* Colors */
+    --bg-app: #09090b; /* Very Dark Grey/Black */
+    --bg-surface: #18181b;
+    --bg-glass: rgba(24, 24, 27, 0.6);
+    
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-active: rgba(255, 255, 255, 0.2);
+    
+    --text-primary: #ededed;
+    --text-secondary: #a1a1aa;
+    --text-tertiary: #71717a;
+    
+    --accent-primary: #3b82f6; /* Modern Blue */
+    --accent-glow: rgba(59, 130, 246, 0.5);
+    
+    --success: #10b981;
+    --error: #ef4444;
+    
+    /* Spacing & Radius */
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-full: 9999px;
+    
+    /* Effects */
+    --blur-glass: blur(12px);
+    --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+    --shadow-hover: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1);
+}
+
+/* Reset & Base */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* Global Layout */
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+    padding-top: 10px;
+}
+
+/* Headers */
+.page-header {
+    margin-bottom: 40px;
+    text-align: center; /* Default center, can be overridden */
+}
+
+.page-title {
+    font-size: 2.5rem; /* 40px */
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(to right, #fff, #a1a1aa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 0.5rem;
+}
+
+.page-subtitle {
+    font-size: 1rem;
+    color: var(--text-secondary);
+}
+
+/* Glassmorphism Cards */
+.video-card, .book-card, .series-card, .comic-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    box-shadow: var(--shadow-card);
+}
+
+.video-card:hover, .book-card:hover, .series-card:hover, .comic-card:hover {
+    transform: translateY(-4px) scale(1.01);
+    border-color: var(--border-active);
+    box-shadow: var(--shadow-hover);
+    z-index: 10;
+}
+
+/* Covers & Thumbnails */
+.video-thumbnail, .book-cover, .series-cover, .comic-cover {
+    position: relative;
+    overflow: hidden;
+    background: #27272a; /* Placeholder bg */
+}
+
+.video-thumbnail img, .book-cover img, .series-cover img, .comic-cover img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: transform 0.5s ease;
+}
+
+.video-card:hover img, .book-card:hover img, .series-card:hover img, .comic-card:hover img {
+    transform: scale(1.05);
+}
+
+/* Info Areas */
+.video-info, .book-info, .series-info, .comic-info {
+    padding: 16px;
+}
+
+.video-title, .book-title, .series-name, .comic-title {
+    font-weight: 600;
+    font-size: 1rem;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.video-meta, .book-meta, .series-meta, .comic-meta {
+    font-size: 0.875rem;
+    color: var(--text-tertiary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+}
+
+/* Buttons & Inputs */
+.search-input {
+    background: var(--bg-surface) !important;
+    border: 1px solid var(--border-subtle) !important;
+    color: var(--text-primary) !important;
+    padding: 14px 20px !important;
+    font-size: 1rem !important;
+    transition: border-color 0.2s !important;
+}
+
+.search-input:focus {
+    border-color: var(--accent-primary) !important;
+    box-shadow: 0 0 0 2px var(--accent-glow) !important;
+}
+
+.filter-btn, .action-btn {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-subtle);
+    color: var(--text-secondary);
+    padding: 8px 16px;
+    border-radius: var(--radius-full);
+    font-weight: 500;
+    font-size: 0.875rem;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.filter-btn:hover {
+    background: #27272a;
+    color: var(--text-primary);
+    border-color: var(--border-active);
+}
+
+.filter-btn.active {
+    background: var(--text-primary);
+    color: var(--bg-app);
+    border-color: var(--text-primary);
+}
+
+/* Badges */
+.badge, .duration-badge, .volume-badge {
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(4px);
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+/* Tabs */
+.view-tabs {
+    border-bottom: 1px solid var(--border-subtle) !important;
+}
+.view-tab {
+    color: var(--text-secondary) !important;
+}
+.view-tab:hover {
+    color: var(--text-primary) !important;
+}
+.view-tab.active {
+    color: var(--text-primary) !important;
+    border-bottom-color: var(--text-primary) !important;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: var(--bg-app);
+}
+::-webkit-scrollbar-thumb {
+    background: #3f3f46;
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #52525b;
+}
