@@ -74,6 +74,9 @@ async function createBookmark(fileId, contentType, position, title, note = null)
         }
 
         const data = await response.json();
+        if (!data || !Array.isArray(data.data)) {
+            return [];
+        }
         return data.data;
     } catch (error) {
         console.error('Error creating bookmark:', error);

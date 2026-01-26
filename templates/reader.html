@@ -172,7 +172,9 @@
             overflow: hidden;
             background: #1a1a1a;
             color: #ccc;
-            font-family: sans-serif;
+            font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo",
+                "Malgun Gothic", "Nanum Gothic", "Spoqa Han Sans Neo",
+                "Noto Serif KR", "Nanum Myeongjo", sans-serif;
             height: 100vh;
             width: 100vw;
         }
@@ -479,9 +481,6 @@
             <button onclick="toggleEpubCompletion()" id="completion-btn-epub" title="완료 표시" style="background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; margin-left: 10px;">
                 ✓
             </button>
-            <button onclick="addEpubBookmarkClick()" id="bookmark-btn-epub" title="북마크" style="background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; margin-left: 10px;">
-                📑
-            </button>
             <button onclick="showEpubSeriesModal()" id="series-btn-epub" title="시리즈 추가" style="background: none; border: none; color: #fff; font-size: 18px; cursor: pointer; margin-left: 10px;">
                 📚
             </button>
@@ -492,8 +491,10 @@
     <div class="settings-panel" id="settings">
         <!-- Settings Header with TOC Button -->
         <div class="settings-header">
+            <button onclick="toggleSettings()">⚙️ 설정화면</button>
             <button onclick="openTOC()">📚 목차</button>
             <button onclick="openTimerModal()">🕒 <span id="timer-display">타이머</span></button>
+            <button onclick="toggleEpubBookmarksPanel()">📑 북마크</button>
         </div>
 
         <div class="setting-group">
@@ -515,10 +516,13 @@
         <div class="setting-group">
             <span class="setting-label">Font Family</span>
             <select onchange="setFont(this.value)">
-                <option value="Helvetica, sans-serif">Sans Serif</option>
-                <option value="Georgia, serif">Serif</option>
-                <option value="'Times New Roman', serif">Times New Roman</option>
-                <option value="Arial, sans-serif">Arial</option>
+                <option value="'Pretendard','Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">프리텐다드</option>
+                <option value="'Noto Sans KR','Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">Noto Sans KR</option>
+                <option value="'Apple SD Gothic Neo','Malgun Gothic','Nanum Gothic',sans-serif">시스템 고딕</option>
+                <option value="'Nanum Gothic','Malgun Gothic',sans-serif">나눔고딕</option>
+                <option value="'Spoqa Han Sans Neo','Malgun Gothic','Nanum Gothic',sans-serif">스포카 한 산스</option>
+                <option value="'Noto Serif KR','Nanum Myeongjo',serif">Noto Serif KR</option>
+                <option value="'Nanum Myeongjo',serif">나눔명조</option>
             </select>
         </div>
 
@@ -3397,26 +3401,30 @@
         async function loadEpubBookmarksPanel() {
             const listDiv = document.getElementById('bookmarks-list-epub');
             listDiv.innerHTML = '<p style="color: #888; text-align: center;">로딩 중...</p>';
+            try {
+                const bookmarks = await getBookmarks(fileId, 'epub');
 
-            const bookmarks = await getBookmarks(fileId, 'epub');
+                if (!Array.isArray(bookmarks) || bookmarks.length === 0) {
+                    listDiv.innerHTML = '<p style="color: #888; text-align: center;">북마크가 없습니다</p>';
+                    return;
+                }
 
-            if (bookmarks.length === 0) {
-                listDiv.innerHTML = '<p style="color: #888; text-align: center;">북마크가 없습니다</p>';
-                return;
+                listDiv.innerHTML = bookmarks.map(b => `
+                    <div style="padding: 15px; margin-bottom: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;"
+                         onclick="goToEpubBookmark('${b.bookmark_position.cfi}')">
+                        <div style="font-weight: bold; margin-bottom: 5px;">${b.title}</div>
+                        ${b.note ? `<div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">${b.note}</div>` : ''}
+                        <div style="font-size: 12px; color: #667eea;">${Math.round((b.bookmark_position.percentage || 0) * 100)}% 위치</div>
+                        <button onclick="event.stopPropagation(); deleteEpubBookmarkClick(${b.id})"
+                                style="margin-top: 8px; padding: 4px 12px; background: #e74c3c; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
+                            삭제
+                        </button>
+                    </div>
+                `).join('');
+            } catch (error) {
+                console.error('Bookmark load error:', error);
+                listDiv.innerHTML = '<p style="color: #dc2626; text-align: center;">북마크를 불러오지 못했습니다</p>';
             }
-
-            listDiv.innerHTML = bookmarks.map(b => `
-                <div style="padding: 15px; margin-bottom: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; cursor: pointer;"
-                     onclick="goToEpubBookmark('${b.bookmark_position.cfi}')">
-                    <div style="font-weight: bold; margin-bottom: 5px;">${b.title}</div>
-                    ${b.note ? `<div style="font-size: 13px; color: #aaa; margin-bottom: 5px;">${b.note}</div>` : ''}
-                    <div style="font-size: 12px; color: #667eea;">${Math.round((b.bookmark_position.percentage || 0) * 100)}% 위치</div>
-                    <button onclick="event.stopPropagation(); deleteEpubBookmarkClick(${b.id})"
-                            style="margin-top: 8px; padding: 4px 12px; background: #e74c3c; color: #fff; border: none; border-radius: 4px; cursor: pointer;">
-                        삭제
-                    </button>
-                </div>
-            `).join('');
         }
 
         // Go to bookmarked position
