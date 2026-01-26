@@ -61,6 +61,7 @@
                     display: flex;
                     gap: 5px;
                     align-items: center;
+                    flex-wrap: wrap; /* 허용된 공간 내 줄바꿈 */
                 }
 
                 .tvb-nav-links a {
@@ -81,6 +82,7 @@
                 .tvb-nav-links a.active {
                     background: rgba(102, 126, 234, 0.5);
                     font-weight: 600;
+                    border: 1px solid rgba(102, 126, 234, 0.8);
                 }
 
                 /* 모바일 메뉴 (768px 이하) */
@@ -152,7 +154,8 @@
                     <div class="tvb-nav-links" id="tvb-nav-links">
                         <a href="/dashboard/${userId}" ${currentPage === 'dashboard' ? 'class="active"' : ''}>대시보드</a>
                         <a href="/gallery/${userId}" ${currentPage === 'gallery' ? 'class="active"' : ''}>갤러리</a>
-                        <a href="/encoded/${userId}" ${currentPage === 'encoded' ? 'class="active"' : ''}>인코딩</a>
+                        <a href="/favorites/${userId}" ${currentPage === 'favorites' ? 'class="active"' : ''}>⭐ 즐겨찾기</a>
+                        <a href="/encoded/${userId}" ${currentPage === 'encoded' ? 'class="active"' : ''}>인코딩됨</a>
                         <a href="/books/${userId}" ${currentPage === 'books' ? 'class="active"' : ''}>eBook</a>
                         <a href="/comics/${userId}" ${currentPage === 'comics' ? 'class="active"' : ''}>만화책</a>
                         <a href="/files/${userId}" ${currentPage === 'files' ? 'class="active"' : ''}>파일</a>
@@ -209,60 +212,7 @@
                     console.log('✅ Toggle button event registered');
                 }
             }, 10);
-
-            // DOM 확인
-            setTimeout(() => {
-                const menu = document.getElementById('tvb-nav-links');
-                const toggle = document.getElementById('tvb-nav-toggle-btn');
-
-                console.log('🔍 DOM Check:');
-                console.log('  - Menu element:', menu ? '✅' : '❌');
-                console.log('  - Toggle button:', toggle ? '✅' : '❌');
-
-                if (menu) {
-                    const styles = window.getComputedStyle(menu);
-                    console.log('  - Menu display:', styles.display);
-                    console.log('  - Menu z-index:', styles.zIndex);
-                    console.log('  - Menu position:', styles.position);
-                }
-            }, 100);
         }
-    };
-
-    // 디버그용 함수
-    window.debugMenu = function() {
-        const menu = document.getElementById('tvb-nav-links');
-
-        if (!menu) {
-            console.error('❌ Menu not found in DOM');
-            return;
-        }
-
-        console.log('📊 Menu Debug Info:');
-        console.log('  - classList:', menu.classList.toString());
-        console.log('  - style.display:', menu.style.display);
-
-        const rect = menu.getBoundingClientRect();
-        console.log('  - Position:', {
-            top: rect.top,
-            left: rect.left,
-            width: rect.width,
-            height: rect.height
-        });
-
-        const menuStyles = window.getComputedStyle(menu);
-        console.log('  - Menu computed styles:', {
-            display: menuStyles.display,
-            position: menuStyles.position,
-            zIndex: menuStyles.zIndex,
-            top: menuStyles.top,
-            visibility: menuStyles.visibility,
-            pointerEvents: menuStyles.pointerEvents
-        });
-
-        // 강제 열기 테스트
-        console.log('🧪 Forcing menu open...');
-        menu.classList.add('open');
     };
 
     // 외부 클릭 시 메뉴 닫기

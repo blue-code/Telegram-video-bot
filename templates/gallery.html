@@ -22,12 +22,7 @@
             min-height: 100vh;
             color: #fff;
             padding: 20px;
-        }
-
-        
-
-        .nav-links a:hover {
-            background: rgba(255, 255, 255, 0.18);
+            padding-top: 10px; /* nav spacing */
         }
 
         .container {
@@ -320,7 +315,12 @@
     <div class="container">
         <div id="tvb-nav-container"></div>
         <script>
-            insertTVBNav({{ user_id }}, 'gallery');
+            // Init Nav
+            document.addEventListener('DOMContentLoaded', () => {
+                if (window.insertTVBNav) {
+                    window.insertTVBNav({{ user_id }}, 'gallery');
+                }
+            });
         </script>
         <div class="gallery-header">
             <h1 class="gallery-title">🎬 Video Gallery</h1>

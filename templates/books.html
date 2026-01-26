@@ -17,8 +17,30 @@
             min-height: 100vh;
             color: #fff;
             padding: 20px;
+            padding-top: 10px; /* nav spacing */
         }
         .container { max-width: 1400px; margin: 0 auto; }
+
+        /* Tabs */
+        .view-tabs {
+            display: flex; gap: 20px;
+            margin-bottom: 30px;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .view-tab {
+            text-decoration: none;
+            color: rgba(255,255,255,0.5);
+            font-weight: 600;
+            font-size: 16px;
+            padding: 10px 5px;
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+        }
+        .view-tab:hover { color: rgba(255,255,255,0.8); }
+        .view-tab.active {
+            color: #fff;
+            border-bottom-color: #fff;
+        }
 
         .page-header { text-align: center; margin-bottom: 30px; }
         .page-title { font-size: 36px; font-weight: 700; margin-bottom: 10px; }
@@ -105,30 +127,24 @@
     </style>
 </head>
 <body>
+    <div id="tvb-nav-container"></div>
+
     <div class="container">
-        <div id="tvb-nav-container"></div>
-        <script>
-            insertTVBNav({{ user_id }}, 'books');
-        </script>
+        <!-- View Tabs -->
+        <div class="view-tabs">
+            <a href="/books/{{ user_id }}" class="view-tab">📚 시리즈 (Series)</a>
+            <a href="/books/files/{{ user_id }}" class="view-tab active">📂 전체 파일 (Files)</a>
+        </div>
 
         <div class="page-header">
-            <h1 class="page-title">📚 eBooks File List</h1>
-            <p class="page-subtitle">Your collection of {{ total_count }} books</p>
+            <h1 class="page-title">eBook 전체 목록</h1>
+            <p class="page-subtitle">{{ total_count }} books</p>
         </div>
 
         <form class="search-bar" action="/books/files/{{ user_id }}" method="GET">
             <input type="text" name="q" class="search-input" placeholder="Search by title or author..." value="{{ query }}">
             <button type="submit" class="search-btn">🔍</button>
         </form>
-
-        <div style="text-align: center; margin-bottom: 30px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;">
-            <a href="/books/{{ user_id }}" style="background: rgba(102, 126, 234, 0.5); padding: 8px 16px; color: #fff; border-radius: 20px; text-decoration: none; font-weight: bold;">
-                🔙 시리즈 뷰로 이동
-            </a>
-            <button id="select-all-btn" onclick="toggleSelectAll()" style="background: rgba(76, 175, 80, 0.8); padding: 8px 16px; color: #fff; border: none; border-radius: 20px; cursor: pointer; font-weight: bold;">
-                ✓ 전체선택
-            </button>
-        </div>
 
         {% if books %}
         <div class="book-grid">
@@ -168,8 +184,8 @@
         {% else %}
         <div class="empty-state">
             <div style="font-size: 64px; margin-bottom: 20px;">📚</div>
-            <p>No books found.</p>
-            <p>Upload .epub files to see them here.</p>
+            <p>eBook이 없습니다.</p>
+            <p>업로드된 .epub 파일이 없습니다.</p>
         </div>
         {% endif %}
     </div>
@@ -180,6 +196,13 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/static/service-worker.js');
         }
+
+        // Init Nav
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.insertTVBNav) {
+                window.insertTVBNav({{ user_id }}, 'books');
+            }
+        });
 
         // Load completion status for all books
         async function loadBooksCompletion() {

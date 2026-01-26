@@ -2355,12 +2355,17 @@ async def books_page(
     per_page: int = 20,
     q: str = ""
 ):
+    """Flat list of all EPUB files"""
     from src.db import get_files, count_files
     from src.db_bookmarks_series import get_all_series_file_ids
 
     try:
         if page < 1: page = 1
 
+        # Get all file_ids in series (to exclude them from main view? No, in flat view usually we show all)
+        # But per logic below, it excludes series items.
+        # Let's keep existing logic but rename route if needed.
+        
         # Get all file_ids in series (to exclude them)
         series_file_ids = await get_all_series_file_ids(user_id, "epub")
 
@@ -2435,7 +2440,7 @@ async def book_series_list_page(
     request: Request,
     user_id: int
 ):
-    """List all book series (both user-created and auto-grouped)"""
+    """List all book series (Main Entry Point)"""
     from src.db import get_book_series
     from src.db_bookmarks_series import get_user_series, get_series_items, get_all_series_file_ids
 
