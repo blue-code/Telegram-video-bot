@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**Telegram Video Bot (TVB)** is an intelligent Telegram bot that downloads videos from YouTube and other sources, processes them for Telegram's file size limits, and stores them in MongoDB Atlas for instant re-streaming. Users send URLs, select quality, and the bot handles downloading, splitting (if needed), and uploading to Telegram.
+**Telegram Video Bot (TVB)** is a multi-purpose Telegram bot and web platform that downloads videos from YouTube and 1000+ sites, manages eBooks (EPUB), comic books (CBZ/ZIP), and provides web-based streaming with a modern interface. Users interact via Telegram bot or web dashboard.
 
 ## Technology Stack
 
@@ -12,8 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Bot Framework:** `python-telegram-bot` (async)
 - **Video Download:** `yt-dlp`
 - **Video Processing:** `ffmpeg`
-- **Database:** MongoDB Atlas via `motor` (async MongoDB driver)
-- **Web Framework:** FastAPI (planned for dashboard)
+- **Database:** Supabase (PostgreSQL) via async client
+- **Web Framework:** FastAPI with Jinja2 templates
+- **Image Processing:** Pillow (comic book thumbnails)
 - **Testing:** pytest with pytest-asyncio and pytest-cov
 
 ## Development Commands
@@ -24,7 +25,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 pip install -r requirements.txt
 
 # Configure environment variables in .env
-# Required: TELEGRAM_BOT_TOKEN, MONGO_URI
+# Required: TELEGRAM_BOT_TOKEN, SUPABASE_URL, SUPABASE_KEY, BIN_CHANNEL_ID
+```
+
+### Running the Application
+```bash
+# Run Telegram bot
+python -m src.bot
+
+# Run web server (development)
+uvicorn src.server:app --reload --port 8000
+
+# Run web server (production)
+uvicorn src.server:app --host 0.0.0.0 --port 8000 --workers 4
+
+# Windows all-in-one (bot + web server)
+start_all.bat
 ```
 
 ### Running Tests
@@ -36,227 +52,378 @@ pytest
 pytest --cov=src --cov-report=html
 
 # Run specific test file
-pytest tests/test_bot_interaction.py
+pytest tests/test_phase7.py -v
 
 # Run in CI mode (non-interactive)
 CI=true pytest
 ```
 
-### Running the Bot
+### Database Migrations
 ```bash
-python -m src.bot
-```
+# Apply migrations manually via Supabase SQL Editor
+# Migration files located in migrations/
 
-### Running Phase Verification Scripts
-```bash
-# Verify completed phases
-python verify_phase1.py  # Database setup
-python verify_phase2.py  # Media processing
-python verify_phase3.py  # Bot interaction
+# Migrate existing comics from files table
+python migrate_existing_comics.py
 ```
 
 ## Architecture
 
-### Core Modules
+### System Architecture
 
-**src/bot.py** - Main bot entry point and handlers
-- Command handlers: `/start`, `/help`
-- Message handler: URL detection via regex
-- Callback handler: Inline button interactions (quality selection)
-- Integrates with `downloader` and `db` modules
-
-**src/downloader.py** - Video information extraction
-- `extract_video_info(url)`: Async wrapper around yt-dlp
-- Returns video metadata: id, title, duration, thumbnail, formats
-- Uses `asyncio.run_in_executor` to avoid blocking
-
-**src/splitter.py** - Video splitting for Telegram limits
-- `get_video_duration(file_path)`: Uses ffprobe to get duration
-- `split_video(file_path, max_size_bytes)`: Splits videos exceeding 2GB into chunks
-- Uses ffmpeg with `-c copy` for fast stream copying
-
-**src/db.py** - MongoDB operations
-- `get_database()`: Returns Motor async client instance
-- `save_video_metadata(data)`: Stores video info and File ID
-- `get_video_by_url(url)`: Retrieves cached video by URL
-- `get_video_by_file_id(file_id)`: Retrieves video by Telegram File ID
-- Uses `tlsAllowInvalidCertificates=True` parameter for OpenSSL 3.x compatibility (fixes TLSV1_ALERT_INTERNAL_ERROR)
-
-### Data Flow
-
-1. User sends URL → `handle_message()` extracts URL via regex
-2. Bot calls `extract_video_info(url)` to get formats
-3. Bot presents inline keyboard with quality options (filtered to unique heights, MP4 only)
-4. User selects quality → `handle_callback()` receives callback data format: `dl|video_id|format_id|quality`
-5. Bot downloads video, splits if >2GB, uploads to Telegram, saves File ID to MongoDB
-6. For repeat requests, bot checks `get_video_by_url()` and resends cached File ID
-
-### MongoDB Schema
-
-**videos collection:**
-```python
-{
-    "url": str,           # Original video URL
-    "file_id": str,       # Telegram File ID for instant resend
-    "title": str,         # Video title
-    "duration": float,    # Duration in seconds
-    "thumbnail": str,     # Thumbnail URL
-    # Additional metadata as needed
-}
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    User Interface Layer                          │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐  │
+│  │  Telegram Bot    │  │  Web Dashboard   │  │  Mobile Web   │  │
+│  │  (src/bot.py)    │  │  (templates/)    │  │  (Responsive) │  │
+│  └──────────────────┘  └──────────────────┘  └───────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                     Application Layer                            │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐  │
+│  │  downloader.py │  │   splitter.py  │  │  comic_parser.py │  │
+│  │    (yt-dlp)    │  │    (ffmpeg)    │  │    (Pillow)      │  │
+│  └────────────────┘  └────────────────┘  └──────────────────┘  │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐  │
+│  │  transcoder.py │  │ user_manager.py│  │link_shortener.py │  │
+│  │  (re-encoding) │  │  (quota/tier)  │  │  (short links)   │  │
+│  └────────────────┘  └────────────────┘  └──────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      Data Layer                                  │
+│  ┌────────────────┐  ┌────────────────┐  ┌──────────────────┐  │
+│  │   db.py        │  │  Bin Channel   │  │  Local Storage   │  │
+│  │  (Supabase)    │  │  (Telegram)    │  │  (download_cache)│  │
+│  └────────────────┘  └────────────────┘  └──────────────────┘  │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Workflow Integration
+### Core Modules
 
-This project follows a strict **Test-Driven Development (TDD)** workflow managed via `conductor/` directory:
+**src/bot.py** - Telegram bot entry point
+- Command handlers: `/start`, `/help`, `/library`, `/search`, `/stats`, `/quota`
+- Message handler: URL detection via regex
+- Callback handlers: Quality selection, playlist handling, favorites
+- Admin commands: `/grant_premium`
 
-- **Plan:** All tasks tracked in `conductor/tracks/bot_mvp_20251231/plan.md`
-- **Phases:** Development organized into phases with checkpoints
-- **Task Format:** Tasks marked `[ ]` (pending), `[~]` (in progress), `[x] <commit_sha>` (completed)
-- **Git Notes:** Task summaries attached to commits via `git notes`
-- **Verification:** Each phase ends with automated tests + manual verification protocol
+**src/server.py** - FastAPI web server (3600+ lines)
+- Video streaming endpoints: `/watch/{short_id}`, `/stream/{file_id}`
+- Gallery pages: `/gallery/{user_id}`, `/dashboard/{user_id}`
+- eBook reader: `/read/{file_id}`, EPUB rendering with progress tracking
+- Comic book viewer: `/comics/{user_id}`, `/comic_reader/{file_id}`
+- File management: Upload, download, delete with multi-file ZIP support
+- API endpoints: RESTful API with X-API-Key authentication
+- Video transcoding: Real-time H.264/AAC encoding for mobile compatibility
 
-### Workflow Requirements
+**src/downloader.py** - Video download engine
+- `extract_video_info(url)`: Async wrapper around yt-dlp
+- Playlist support with individual video selection
+- Format filtering: MP4 video + MP3 audio extraction
+- Thumbnail extraction and caching
 
-1. **Select task** from plan.md in order
-2. **Write failing tests** first (Red phase)
-3. **Implement** minimum code to pass (Green phase)
-4. **Verify coverage** (target >80%)
-5. **Commit** code changes with conventional commit format
-6. **Attach git note** with task summary to commit
-7. **Update plan.md** with commit SHA and mark task complete
-8. **Commit plan.md** update with `conductor(plan):` prefix
+**src/splitter.py** - Video processing
+- `split_video(file_path, max_size_bytes)`: Splits videos >2GB for Telegram
+- Uses ffmpeg with `-c copy` for fast stream copying
+- Automatic cleanup of temporary files
 
-### Phase Completion Protocol
+**src/comic_parser.py** - Comic book metadata extraction
+- `is_comic_book(file_path)`: Detects CBZ/ZIP with 80%+ image ratio
+- `extract_comic_metadata(file_path)`: Extracts series, volume, page count
+- Series pattern matching: Recognizes "야와라 01권", "OnePiece vol.1" formats
+- Thumbnail generation with Pillow (274x400 WebP/JPEG)
+- `get_page_image(file_path, page_num)`: Page-by-page extraction for viewer
 
-After completing a phase:
-1. Ensure all phase changes have test coverage
-2. Run automated tests with announcement
-3. Provide detailed manual verification plan
-4. Await user confirmation
-5. Create checkpoint commit with `conductor(checkpoint):` prefix
-6. Attach verification report via git notes
-7. Update plan.md with checkpoint SHA
+**src/db.py** - Supabase database operations (1250+ lines)
+- Video CRUD: `save_video_metadata()`, `get_user_videos()`, `delete_video()`
+- User management: `get_or_create_user()`, `update_user_tier()`, quota tracking
+- Favorites: `add_favorite()`, `remove_favorite()`, `get_favorites()`
+- Short links: `get_or_create_short_link()`, view tracking with analytics
+- eBook: `get_books()`, `save_reading_progress()`, EPUB metadata storage
+- Comics: `save_comic_metadata()`, `get_comic_series()`, progress tracking
+- Files: Generic file management with filtering, search, pagination
 
-## Code Style
+**src/transcoder.py** - Video re-encoding
+- Real-time transcoding to H.264/AAC for mobile compatibility
+- Resolution selection: 720p, 1080p, original
+- FFmpeg-based streaming with cleanup
+- Encoded video caching and management
 
-Follows **Google Python Style Guide** (see `conductor/code_styleguides/python.md`):
+**src/user_manager.py** - User tier and quota system
+- Tier levels: FREE (10 videos/day), PREMIUM (unlimited)
+- Daily quota enforcement with reset at midnight
+- Usage statistics and analytics
 
-- **Line length:** 80 characters max
-- **Indentation:** 4 spaces (no tabs)
-- **Naming:** `snake_case` for functions/variables, `PascalCase` for classes, `ALL_CAPS` for constants
-- **Docstrings:** Required for all public functions/classes, use `"""triple quotes"""`
-- **Type annotations:** Strongly encouraged
-- **Imports:** Grouped (stdlib, third-party, local) on separate lines
-- **Async patterns:** Use `async/await` throughout; wrap blocking calls with `run_in_executor`
+**src/link_shortener.py** - Short link generation
+- Generates 6-character short IDs for videos
+- Collision detection and retry logic
+- View tracking with IP and User-Agent analytics
 
-## Testing Patterns
+### Data Flow Examples
 
-- Use `pytest-asyncio` for async test functions
-- Mock external services (Telegram API, MongoDB) using `unittest.mock` or pytest fixtures
-- Test file naming: `test_<module_name>.py`
-- Verify both success and failure cases
-- Use `httpx` for async HTTP testing (FastAPI endpoints)
+#### Video Download Flow
+1. User sends URL → `handle_message()` validates URL
+2. Bot calls `extract_video_info(url)` → returns formats
+3. Bot presents inline keyboard with quality options
+4. User selects quality → `handle_callback()` parses `dl|video_id|format_id|quality`
+5. Bot downloads → splits if >2GB → uploads to Bin Channel
+6. Saves file_id to Supabase → creates short link
+7. Sends video to user with streaming button
 
-## Environment Variables
+#### Comic Book Upload Flow
+1. User uploads ZIP file → `server.py` receives file
+2. `is_comic_book()` checks image ratio (80%+ images)
+3. `extract_comic_metadata()` parses filename for series/volume
+4. Generates thumbnail (base64 encoded for JSON)
+5. Saves to permanent storage: `download_cache/comics/{user_id}/`
+6. Inserts metadata into `comics` table with file_path
+7. Displays in `/comics/{user_id}` gallery
 
-Required in `.env`:
-- `TELEGRAM_BOT_TOKEN`: Bot token from @BotFather
-- `MONGO_URI`: MongoDB Atlas connection string
+#### EPUB Reading Flow
+1. User clicks book → `/read/{file_id}` loads reader
+2. EPUB file extracted in memory with `ebooklib`
+3. HTML rendered with custom CSS theme
+4. JavaScript tracks reading position (CFI - Canonical Fragment Identifier)
+5. Progress saved to `reading_progress` table on page turn
+6. Next session resumes from saved position
+
+### Database Schema (Supabase PostgreSQL)
+
+**videos** - Video metadata and file IDs
+```sql
+- id, url, file_id, title, duration, thumbnail
+- user_id, metadata (JSONB), views, short_id
+- created_at
+```
+
+**users** - User management and quotas
+```sql
+- id, telegram_user_id, username, full_name
+- tier (FREE/PREMIUM), daily_quota, quota_used, quota_reset_at
+```
+
+**favorites** - User favorite videos
+```sql
+- user_id, video_id, created_at
+```
+
+**shared_links** - Short link mapping
+```sql
+- id, short_id, file_id, video_id, user_id, created_at
+```
+
+**views** - View tracking and analytics
+```sql
+- id, video_id, short_id, ip_address, user_agent, created_at
+```
+
+**files** - Generic file storage
+```sql
+- id, user_id, file_id, file_name, file_size, mime_type
+- file_path, metadata (JSONB), created_at
+```
+
+**books** - EPUB metadata
+```sql
+- id, file_id, user_id, title, author, cover_file_id, page_count
+```
+
+**reading_progress** - EPUB reading position
+```sql
+- user_id, file_id, current_page, current_cfi, settings (JSONB)
+```
+
+**comics** - Comic book metadata
+```sql
+- id, file_id, user_id, title, series, volume, folder
+- page_count, metadata (JSONB with cover_base64)
+```
+
+**comic_progress** - Comic reading position
+```sql
+- user_id, file_id, current_page, settings (JSONB)
+```
+
+**comic_favorites** - Comic favorites
+```sql
+- user_id, file_id
+```
+
+## Key Features Implementation
+
+### Comic Book Viewer (`templates/comic_reader.html`)
+- Dual mode: Page-by-page (comic mode) + Vertical scroll (webtoon mode)
+- Reading direction: LTR/RTL toggle
+- Double-page auto-split for portrait screens (aspect ratio >1.5:1)
+- Canvas-based image splitting with GPU acceleration
+- Auto-navigation between volumes in series
+- Progress saving with page number tracking
+- Favorites and download support
+- Lazy loading for webtoon mode with Intersection Observer
+- Touch gestures and keyboard shortcuts
+
+### EPUB Reader (`templates/epub_reader.html`)
+- Full EPUB rendering with CSS theming (sepia, dark, light)
+- Font size adjustment and family selection
+- Progress tracking with CFI (Canonical Fragment Identifier)
+- Chapter navigation with table of contents
+- Touch-friendly page turning
+- Bookmark support
+- Reading statistics
+
+### Responsive Navigation (`static/nav.js`)
+- Mobile hamburger menu (768px breakpoint)
+- Event-driven toggle without overlay
+- Outside click detection for auto-close
+- iPhone Safari compatible
+- Clean z-index layering (toggle: 10001, menu: 10000)
+
+### Video Transcoding
+- Automatic mobile detection (User-Agent parsing)
+- On-demand H.264/AAC encoding via FFmpeg
+- Progress tracking during encoding
+- Cached encoded videos for repeat access
+- Cleanup of old encoded files (7-day retention)
 
 ## Common Patterns
 
 ### Async Context
-All bot handlers and media processing functions are async. Use:
+All bot handlers, database operations, and file processing are async:
 ```python
 async def function_name():
-    # Async operations
-    await some_async_call()
+    await async_operation()
 ```
 
 ### Blocking Operations
-Wrap blocking calls (yt-dlp, ffmpeg) in executor:
+Wrap blocking calls (yt-dlp, ffmpeg, Pillow) in executor:
 ```python
 loop = asyncio.get_running_loop()
-result = await loop.run_in_executor(None, blocking_function)
+result = await loop.run_in_executor(None, blocking_function, args)
 ```
 
-### Inline Keyboards
-Callback data format: `action|param1|param2|...`
-Split with `data.split('|')` in callback handler
+### Callback Data Format
+Telegram inline button callbacks use pipe-delimited strings:
+```python
+# Format: action|param1|param2|...
+callback_data = "dl|video_id|format_id|1080p"
+parts = callback_data.split('|')
+action, video_id, format_id, quality = parts
+```
+
+### Base64 Image Encoding
+Thumbnails stored as base64 in JSONB for JSON serialization:
+```python
+import base64
+cover_base64 = base64.b64encode(image_bytes).decode('utf-8')
+metadata = {"cover_base64": cover_base64}
+
+# Decode when serving
+image_bytes = base64.b64decode(metadata["cover_base64"])
+```
 
 ### Error Handling
-- Log errors with `logging.error()`
-- Send user-friendly Korean messages via `edit_message_text()` or `reply_text()`
+- Log errors with context: `logger.error(f"Error message: {e}")`
+- User-facing messages in Korean via `reply_text()` or `edit_message_text()`
+- HTTP exceptions in FastAPI: `raise HTTPException(status_code=404, detail="Not found")`
 
-## Current Status (as of Phase 3 completion)
+## Environment Variables
 
-**Completed:**
-- MongoDB Atlas integration with Motor
-- Video info extraction via yt-dlp
-- Video splitting with ffmpeg (2GB chunks)
-- Basic bot commands (`/start`, `/help`)
-- URL detection and quality selection menu
-- Inline keyboard callbacks
+Required in `.env`:
+```env
+# Telegram (Required)
+TELEGRAM_BOT_TOKEN=your_bot_token
+BIN_CHANNEL_ID=-100xxxxxxxxxx
 
-**TODO (Phase 4-5):**
-- Download progress tracking with live updates
-- Telegram file upload with File ID storage
-- Cached video re-streaming
+# Supabase (Required)
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_KEY=your_supabase_anon_key
 
-## Important Notes
+# Optional
+BASE_URL=http://localhost:8000
+ADMIN_USER_ID=your_telegram_user_id
+API_KEY=your_secure_api_key
+DEFAULT_USER_ID=41509535
+```
 
-- Bot runs on macOS locally (dev environment) with Python 3.12 and OpenSSL 3.5.0
-- MongoDB Atlas connection uses `tlsInsecure=true` workaround for OpenSSL 3.x TLS handshake compatibility
-- All user-facing messages are in Korean
-- Inline buttons filter formats to unique heights, MP4 only, plus MP3 audio-only option
-- Commit messages use conventional commits: `feat(scope):`, `fix(scope):`, `test(scope):`
-- Plan updates use `conductor(plan):` or `conductor(checkpoint):` prefix
+## File Storage Patterns
 
-## Known Issues & Workarounds
+### Temporary Files
+- Downloaded videos: `download_cache/` (auto-cleanup after upload)
+- Encoded videos: `encoded_cache/` (7-day retention)
+- Temporary uploads: System temp directory with UUID prefix
 
-**CRITICAL: OpenSSL 3.5.0 TLS Handshake Error with MongoDB Atlas**
+### Permanent Storage
+- Comic books: `download_cache/comics/{user_id}/{hash}_{filename}.zip`
+- EPUB files: Stored in Telegram Bin Channel, retrieved on-demand
+- Thumbnails: Base64 in database JSONB or Telegram file_id
 
-**Problem:**
-`TLSV1_ALERT_INTERNAL_ERROR` when performing MongoDB Atlas queries on macOS with OpenSSL 3.5.0 and Python 3.12.
+## Testing Patterns
 
-**Root Cause:**
-OpenSSL 3.5.0 removed legacy TLS cipher suites that some MongoDB Atlas clusters still use. This creates an incompatibility that cannot be resolved through pymongo/motor configuration alone.
+- Use `pytest-asyncio` for async functions with `@pytest.mark.asyncio`
+- Mock Telegram API calls with `unittest.mock.AsyncMock`
+- Mock Supabase responses with fixtures
+- Test both success and error paths
+- Coverage target: >80%
 
-**Current Status:**
-- ✅ Bot starts successfully
-- ✅ Database connection initializes
-- ❌ Database queries fail with SSL handshake error when bot receives messages
+## Mobile Compatibility
 
-**Workarounds (choose one):**
+### iPhone Safari Considerations
+- Use `-webkit-` prefixes for backdrop-filter, transform
+- Avoid complex CSS animations (use display: none/flex instead)
+- `pointer-events` management for touch events
+- Explicit `z-index` values (avoid auto)
+- `<meta name="viewport">` for responsive scaling
 
-1. **Use Local MongoDB (Recommended for Development)**
-   ```bash
-   # Install MongoDB locally via Homebrew
-   brew install mongodb-community
-   brew services start mongodb-community
+### Responsive Breakpoints
+- Mobile: 0-768px (1-column layouts, hamburger menu)
+- Tablet: 768-1024px (2-3 column grids)
+- Desktop: 1024px+ (full layouts)
 
-   # Update .env
-   MONGO_URI=mongodb://localhost:27017
-   ```
+## Known Issues
 
-2. **Use Docker MongoDB**
-   ```bash
-   docker run -d -p 27017:27017 --name mongodb mongo:latest
-   # Update .env: MONGO_URI=mongodb://localhost:27017
-   ```
+### Supabase Migration
+Project migrated from MongoDB Atlas to Supabase PostgreSQL. Old MongoDB references in legacy code should be ignored.
 
-3. **Contact MongoDB Atlas Support**
-   - Request TLS configuration upgrade to support OpenSSL 3.x
-   - Upgrade to a newer cluster tier with modern TLS support
+### File Path Storage
+Comic books require `file_path` column in `files` table for page-by-page reading. Migration: `ALTER TABLE files ADD COLUMN file_path TEXT;`
 
-4. **Use Python 3.11 with Older OpenSSL**
-   ```bash
-   # Install Python 3.11 which uses OpenSSL 3.0.x
-   brew install python@3.11
-   python3.11 -m venv venv
-   source venv/bin/activate
-   pip install -r requirements.txt
-   ```
+### Pillow Dependency
+Required for comic book thumbnail generation. Ensure `Pillow>=10.0.0` in requirements.txt.
 
-**Temporary Development Bypass:**
-The code in `src/db.py` attempts to use `tlsAllowInvalidCertificates=true`, but this parameter is not honored by pymongo 4.15.5 with OpenSSL 3.5.0. A code-only fix is not currently possible.
+## Code Style
+
+- **Line length:** 120 characters (relaxed from 80 for web templates)
+- **Naming:** `snake_case` for functions/variables, `PascalCase` for classes
+- **Docstrings:** Required for public functions
+- **Type hints:** Encouraged but not strictly enforced
+- **Imports:** Grouped (stdlib, third-party, local)
+- **User messages:** Korean language for bot interactions
+- **Commit format:** Conventional commits (`feat:`, `fix:`, `refactor:`)
+
+## Current Status
+
+**Implemented Features:**
+- ✅ Video download and streaming (YouTube + 1000+ sites)
+- ✅ Playlist support with individual selection
+- ✅ Bin Channel integration (permanent storage)
+- ✅ Web player with modern UI and keyboard shortcuts
+- ✅ Video transcoding for mobile compatibility
+- ✅ User management with FREE/PREMIUM tiers
+- ✅ Daily quota system
+- ✅ EPUB reader with progress tracking
+- ✅ Comic book viewer (CBZ/ZIP) with dual modes
+- ✅ File management with search, filters, multi-download
+- ✅ Responsive web interface with mobile support
+- ✅ RESTful API with authentication
+- ✅ Short link generation and analytics
+
+**Recent Additions:**
+- ✅ Comic book series auto-grouping by filename patterns
+- ✅ Responsive hamburger menu for mobile navigation
+- ✅ iPhone Safari compatibility improvements
+- ✅ Base64 thumbnail caching for JSON serialization
+- ✅ File deletion API fix (422 error resolved)

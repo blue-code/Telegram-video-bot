@@ -1,0 +1,8 @@
+{
+  "track_id": "epub_series_and_rescan_20260119",
+  "type": "feature",
+  "status": "new",
+  "created_at": "2026-01-19T00:00:00Z",
+  "updated_at": "2026-01-19T00:00:00Z",
+  "description": "epub도 시리즈를 구별하여, 시리즈인 경우는 ebook메뉴에서 시리즈로 표시하고, 클릭하여 들어간 경우에만 전체 책이 나오도록 해줘. 그리고 이전 올라간 책도 재스캔 기능을 추가하여, 다시 정리 할 수 있도록 해줘."
+}

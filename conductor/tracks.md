@@ -9,11 +9,24 @@ This file tracks all major tracks for the project. Each track has its own detail
 
 ---
 
-- [x] **Track: ë§Œí™”ì±?ë©”ë‰´??ê¸°ë³¸ ë·°ë? ?œë¦¬ì¦ˆë¡œ ë³€ê²½í•´ì¤? ê·¸ë¦¬ê³??€??ë³´ë“œ?ì„œ ?„ì¬ ?½ê³  ?ˆëŠ” ë§Œí™”ì±…ë„ ?œì‹œ?´ì¤˜. ë§Œí™”ì±…ì˜ ?œë¦¬ì¦ˆë¡œ êµ¬ë¶„?˜ëŠ” ë°©ì‹?¼ë¡œ ?´ëŸ° ?¨í„´??ì¶”ê??´ì¤˜. "ê·¸ê±° ê·¸ë ‡ê²??˜ëŠ”ê±??„ë‹Œ??9??zip","ê·¸ê±° ê·¸ë ‡ê²??˜ëŠ”ê±??„ë‹Œ??10??zip" ê¸°ì¡´???´ë ‡ê²??¬ë¼ê°??°ì´?°ë? ë§ˆì´ê·¸ë ˆ?´ì…˜ ?????ˆëŠ” ?„ë¡œê·¸ë¨??ë§Œë“¤?´ì¤˜.**
+## [x] Track: Comic Series View & Dashboard Integration
+**Description:** Change default comic view to series, integrate with dashboard, and add migration logic for file patterns.
 *Link: [./conductor/tracks/comix_series_view_20260117/](./conductor/tracks/comix_series_view_20260117/)*
 
 ---
 
-- [x] **Track: epub???œë¦¬ì¦ˆë? êµ¬ë³„?˜ì—¬, ?œë¦¬ì¦ˆì¸ ê²½ìš°??ebookë©”ë‰´?ì„œ ?œë¦¬ì¦ˆë¡œ ?œì‹œ?˜ê³ , ?´ë¦­?˜ì—¬ ?¤ì–´ê°?ê²½ìš°?ë§Œ ?„ì²´ ì±…ì´ ?˜ì˜¤?„ë¡ ?´ì¤˜. ê·¸ë¦¬ê³??´ì „ ?¬ë¼ê°?ì±…ë„ ?¬ìŠ¤ìº?ê¸°ëŠ¥??ì¶”ê??˜ì—¬, ?¤ì‹œ ?•ë¦¬ ?????ˆë„ë¡??´ì¤˜.**
-*Link: [./conductor/tracks/epub_series_and_rescan_20260119/](./conductor/tracks/epub_series_and_rescan_20260119/)*`n---`n`n- [x] **Track: ebook ¸Ş´ºÀÇ ±âº»ÀÌ ½Ã¸®ÁîºäÀÎµ¥, ÀÌ°ÍÀÌ 1±Ç¹Û¿¡ ¾ø´Â Ã¥µµ ½Ã¸®Áîºä·Î ÀâÈ÷¸é¼­ ±× 1±Ç»ÓÀÎ ½Ã¸®Áîºä·Î Å¬¸¯ÇÏ¿© µé¾î°¡¸é Ã¥À» ¸øÀĞ´Â´Ù. ÀÌ·± °æ¿ì ¹Ù·Î Ã¥À» ÀĞÀ» ¼ö ÀÖµµ·Ï ¼öÁ¤ÀÌ ÇÊ¿äÇÏ´Ù.**
+## [x] Track: EPUB Series Grouping & Rescan
+**Description:** Auto-group EPUBs into series based on metadata/filenames and add rescan capability.
+*Link: [./conductor/tracks/epub_series_and_rescan_20260119/](./conductor/tracks/epub_series_and_rescan_20260119/)*
 
+---
+
+## [x] Track: EPUB TTS Stabilization
+**Description:** Fix stability issues in TTS, implement singleton audio controller, and add comprehensive tests.
+*Link: [./conductor/tracks/epub_tts_stabilization_20260120/](./conductor/tracks/epub_tts_stabilization_20260120/)*
+
+---
+
+## [x] Track: Universal Series & Bookmarks
+**Description:** Manual series creation, advanced bookmarking, and read status tracking for all content types.
+*Link: [./conductor/tracks/universal_series_and_bookmarks_20260126/](./conductor/tracks/universal_series_and_bookmarks_20260126/)*

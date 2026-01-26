@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.coverage
 
 # Virtual environments
 venv/
@@ -16,14 +17,18 @@ venv_win/
 
 # Downloads and temp files
 downloads/
+download_cache/
+encoded_cache/
 uploads/
 hls_cache/
 *.tmp
 *.log
+tts_log*.txt
 
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # Utility scripts (not needed in repo)
 fix_env.py
@@ -31,3 +36,11 @@ add_env.py
 get_channel_id.py
 verify_channel_post.py
 venv_linux/
+
+# Playwright
+node_modules/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/

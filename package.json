@@ -1,0 +1,26 @@
+{
+  "name": "telegram-video-bot",
+  "version": "1.0.0",
+  "description": "> 유튜브 영상을 텔레그램으로 다운로드하고, 웹에서 스트리밍하고, 플레이리스트까지 한 번에!",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {},
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blue-code/Telegram-video-bot.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/blue-code/Telegram-video-bot/issues"
+  },
+  "homepage": "https://github.com/blue-code/Telegram-video-bot#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^25.0.9"
+  }
+}
